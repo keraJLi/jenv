@@ -4,11 +4,11 @@ from functools import cached_property
 import jax
 from jax import numpy as jnp
 
-from jenv.struct import PyTreeNode, static_field
+from jenv.struct import FrozenPyTreeNode, static_field
 from jenv.typing import Key, PyTree
 
 
-class Space(ABC, PyTreeNode):
+class Space(ABC, FrozenPyTreeNode):
     @abstractmethod
     def sample(self, key: Key) -> PyTree: ...
 
@@ -108,7 +108,7 @@ class PyTreeSpace(Space):
         })
     """
 
-    tree: PyTree[Space]
+    tree: PyTree
 
     def __init__(self, tree: PyTree):
         for leaf in jax.tree.leaves(tree, is_leaf=lambda x: isinstance(x, Space)):
@@ -140,7 +140,7 @@ class PyTreeSpace(Space):
         return f"{self.__class__.__name__}({self.tree!r})"
 
     @cached_property
-    def shape(self) -> PyTree[tuple[int, ...]]:
+    def shape(self) -> PyTree:
         return jax.tree.map(
             lambda space: space.shape,
             self.tree,

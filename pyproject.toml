@@ -8,6 +8,7 @@ authors = [
     {name = "Jarek Liesen", email = "jarek.liesen@reuben.ox.ac.uk"},
 ]
 dependencies = [
+    "gymnax",
     "jax>=0.5.0",
 ]
 
@@ -45,7 +46,18 @@ build-backend = "hatchling.build"
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.uv.sources]
+gymnax = { git = "https://github.com/RobertTLange/gymnax" }
+
 [dependency-groups]
+compat = [
+    "gymnax @ git+https://github.com/RobertTLange/gymnax@main",
+    "brax>=0.13.0",
+    "craftax>=1.4.3",
+    "navix>=0.7.0",
+    "jumanji>=1.0.1",
+    "kinetix-env>=2.0.0",
+]
 dev = [
     "pytest>=9.0.0",
     "ruff>=0.14.2",

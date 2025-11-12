@@ -1,8 +1,6 @@
-from typing import Any, Mapping, Sequence, TypeAlias, TypeVar
+from typing import Any, TypeAlias
 
 import jax
 
-Leaf = TypeVar("Leaf")
-PyTree: TypeAlias = Leaf | Sequence["PyTree[Leaf]"] | Mapping[Any, "PyTree[Leaf]"]
-
+PyTree: TypeAlias = Any
 Key: TypeAlias = jax.Array

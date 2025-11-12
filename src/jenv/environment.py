@@ -1,34 +1,68 @@
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from jenv import spaces
-from jenv.struct import PyTreeNode
+from jenv.struct import Container, FrozenPyTreeNode
 from jenv.typing import Key, PyTree
 
 __all__ = ["Environment", "State"]
 
 
-State: TypeAlias = PyTree
+@runtime_checkable
+class Info(Protocol):
+    obs: PyTree
+    reward: float
+    terminated: bool
+
+    def update(self, **changes: PyTree) -> "Info": ...
+    def __getattr__(self, name: str) -> PyTree: ...
 
 
 @runtime_checkable
-class StepInfo(Protocol):
+class State(Protocol):
+    env_state: PyTree
+
+    def update(self, **changes: PyTree) -> "State": ...
+    def __getattr__(self, name: str) -> PyTree: ...
+
+
+class InfoContainer(Container):
     obs: PyTree
     reward: float
-    done: bool
+    terminated: bool
+
+    @property
+    def obs(self) -> PyTree:
+        return self._fields["obs"]
+
+    @property
+    def reward(self) -> float:
+        return self._fields["reward"]
+
+    @property
+    def terminated(self) -> bool:
+        return self._fields["terminated"]
 
 
-class Environment(ABC, PyTreeNode):
+class StateContainer(Container):
+    env_state: PyTree
+
+    @property
+    def env_state(self) -> PyTree:
+        return self._fields["env_state"]
+
+
+class Environment(ABC, FrozenPyTreeNode):
     """
     Base class for all environments.
     """
 
     @abstractmethod
-    def reset(self, key: Key) -> tuple[State, StepInfo]: ...
+    def reset(self, key: Key) -> tuple[State, Info]: ...
 
     @abstractmethod
-    def step(self, state: State, action: PyTree) -> tuple[State, StepInfo]: ...
+    def step(self, state: State, action: PyTree) -> tuple[State, Info]: ...
 
     @abstractmethod
     @cached_property
@@ -37,3 +71,7 @@ class Environment(ABC, PyTreeNode):
     @abstractmethod
     @cached_property
     def action_space(self) -> spaces.Space: ...
+
+    @property
+    def unwrapped(self) -> "Environment":
+        return self

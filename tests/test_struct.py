@@ -14,14 +14,14 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jenv.struct import PyTreeNode, field, static_field
+from jenv.struct import FrozenPyTreeNode, field, static_field
 
 # ============================================================================
 # Test Fixtures and Helper Classes
 # ============================================================================
 
 
-class SimpleNode(PyTreeNode):
+class SimpleNode(FrozenPyTreeNode):
     """Test class with dynamic and static fields."""
 
     x: jax.Array  # dynamic field (pytree node)
@@ -29,7 +29,7 @@ class SimpleNode(PyTreeNode):
     static_val: int = static_field()  # static field
 
 
-class _NodeWithDefaults(PyTreeNode):
+class _NodeWithDefaults(FrozenPyTreeNode):
     """Helper node used to exercise default factories and static fields."""
 
     x: jax.Array
@@ -37,14 +37,14 @@ class _NodeWithDefaults(PyTreeNode):
     scale: float = static_field(default=1.0)
 
 
-class _NodeWithDefaultList(PyTreeNode):
+class _NodeWithDefaultList(FrozenPyTreeNode):
     """Helper node for default_factory independence checks."""
 
     x: jax.Array
     items: list = static_field(default_factory=list)
 
 
-class _BaseNode(PyTreeNode):
+class _BaseNode(FrozenPyTreeNode):
     """Helper base node for inheritance tests."""
 
     x: jax.Array
@@ -58,7 +58,7 @@ class _DerivedNode(_BaseNode):
     extra: int = static_field(default=0)
 
 
-class _OrderedNode(PyTreeNode):
+class _OrderedNode(FrozenPyTreeNode):
     """Helper node for verifying flatten ordering and stability."""
 
     a: jax.Array
@@ -69,7 +69,7 @@ class _OrderedNode(PyTreeNode):
     d: jax.Array
 
 
-class _ComplexNode(PyTreeNode):
+class _ComplexNode(FrozenPyTreeNode):
     """Helper node for exercising round-trip with diverse static fields."""
 
     array_field: jax.Array
@@ -231,19 +231,15 @@ class TestPyTreeNodeJAXIntegration:
         )
 
         # Flatten
-        children, aux_data = node.tree_flatten()
+        children, treedef = jax.tree_util.tree_flatten(node)
 
         # children should contain dynamic fields (x, y)
         assert len(children) == 2
         assert jnp.allclose(children[0], jnp.array([1.0, 2.0]))
         assert jnp.allclose(children[1], jnp.array([3.0, 4.0]))
 
-        # aux_data should contain static fields (static_val)
-        assert len(aux_data) == 1
-        assert aux_data[0] == 42
-
         # Unflatten
-        reconstructed = SimpleNode.tree_unflatten(aux_data, children)
+        reconstructed = jax.tree_util.tree_unflatten(treedef, children)
 
         assert jnp.allclose(reconstructed.x, node.x)
         assert jnp.allclose(reconstructed.y, node.y)
@@ -288,8 +284,8 @@ class TestPyTreeNodeJAXIntegration:
             d=jnp.array([4.0]),
         )
 
-        children1, aux1 = node.tree_flatten()
-        children2, aux2 = node.tree_flatten()
+        children1, treedef1 = jax.tree_util.tree_flatten(node)
+        children2, treedef2 = jax.tree_util.tree_flatten(node)
 
         expected_children = (
             jnp.array([1.0]),
@@ -297,18 +293,16 @@ class TestPyTreeNodeJAXIntegration:
             jnp.array([3.0]),
             jnp.array([4.0]),
         )
-        expected_aux = (10, "test")
 
         assert len(children1) == len(expected_children) == 4
         for child, expected in zip(children1, expected_children):
             assert jnp.allclose(child, expected)
-        assert aux1 == expected_aux
 
         assert len(children1) == len(children2)
         assert all(jnp.allclose(c1, c2) for c1, c2 in zip(children1, children2))
-        assert aux1 == aux2
+        assert treedef1 == treedef2
 
-        reconstructed = _OrderedNode.tree_unflatten(aux1, children1)
+        reconstructed = jax.tree_util.tree_unflatten(treedef1, children1)
         assert jnp.allclose(reconstructed.a, node.a)
         assert jnp.allclose(reconstructed.b, node.b)
         assert reconstructed.static_1 == node.static_1
@@ -341,8 +335,8 @@ class TestPyTreeNodeJAXIntegration:
     )
     def test_tree_flatten_round_trip(self, node):
         """Flatten/unflatten should be a no-op for representative nodes."""
-        children, aux_data = node.tree_flatten()
-        reconstructed = type(node).tree_unflatten(aux_data, children)
+        children, treedef = jax.tree_util.tree_flatten(node)
+        reconstructed = jax.tree_util.tree_unflatten(treedef, children)
 
         for field_info in dataclasses.fields(node):
             original_value = getattr(node, field_info.name)
@@ -364,7 +358,7 @@ class TestPyTreeNodeNesting:
     def test_nested_pytree_nodes(self):
         """Test nested PyTreeNode structures."""
 
-        class Outer(PyTreeNode):
+        class Outer(FrozenPyTreeNode):
             inner: SimpleNode
             z: jax.Array
 
@@ -382,10 +376,10 @@ class TestPyTreeNodeNesting:
     def test_nested_defaults(self):
         """Test nodes with defaults containing other nodes with defaults."""
 
-        class InnerNode(PyTreeNode):
+        class InnerNode(FrozenPyTreeNode):
             value: jax.Array = field(default_factory=lambda: jnp.array([0.0]))
 
-        class OuterNode(PyTreeNode):
+        class OuterNode(FrozenPyTreeNode):
             data: jax.Array
             inner: InnerNode = field(default_factory=InnerNode)
 
@@ -432,10 +426,9 @@ class TestPyTreeNodeDefaults:
         assert transformed.scale == 2.0
 
         # tree_flatten / tree_unflatten should round-trip the node
-        children, aux_data = explicit.tree_flatten()
+        children, treedef = jax.tree_util.tree_flatten(explicit)
         assert len(children) == 2
-        assert len(aux_data) == 1
-        reconstructed = _NodeWithDefaults.tree_unflatten(aux_data, children)
+        reconstructed = jax.tree_util.tree_unflatten(treedef, children)
         assert jnp.allclose(reconstructed.x, explicit.x)
         assert jnp.allclose(reconstructed.y, explicit.y)
         assert reconstructed.scale == explicit.scale
@@ -454,7 +447,7 @@ class TestPyTreeNodeDefaults:
     def test_static_field_with_default(self):
         """Test that static_field() supports default values."""
 
-        class NodeWithStaticDefault(PyTreeNode):
+        class NodeWithStaticDefault(FrozenPyTreeNode):
             x: jax.Array
             config: dict = static_field(default_factory=dict)
             threshold: float = static_field(default=0.5)
@@ -476,7 +469,7 @@ class TestPyTreeNodeDefaults:
     def test_mixed_required_and_default_fields(self):
         """Test nodes with mix of required and default fields."""
 
-        class NodeMixedDefaults(PyTreeNode):
+        class NodeMixedDefaults(FrozenPyTreeNode):
             # Required fields
             a: jax.Array
             b: int = static_field()
@@ -543,9 +536,8 @@ class TestPyTreeNodeInheritance:
         with pytest.raises(dataclasses.FrozenInstanceError):
             node.x = jnp.array([5.0])
 
-        children, aux_data = node.tree_flatten()
+        children, treedef = jax.tree_util.tree_flatten(node)
         assert len(children) == 2  # dynamic fields
-        assert len(aux_data) == 2  # static fields
 
         mapped = jax.tree.map(lambda arr: arr * 2, node)
         assert jnp.allclose(mapped.x, jnp.array([2.0, 4.0]))
@@ -607,7 +599,7 @@ class TestPyTreeNodeSerialization:
     def test_pytree_node_repr_with_defaults(self):
         """Test __repr__ with nodes that have default values."""
 
-        class NodeWithDefaults(PyTreeNode):
+        class NodeWithDefaults(FrozenPyTreeNode):
             x: jax.Array
             y: jax.Array = field(default_factory=lambda: jnp.array([0.0]))
             meta: str = static_field(default="default_meta")
@@ -621,10 +613,10 @@ class TestPyTreeNodeSerialization:
     def test_pytree_node_repr_nested(self):
         """Test __repr__ with nested PyTreeNode structures."""
 
-        class Inner(PyTreeNode):
+        class Inner(FrozenPyTreeNode):
             value: jax.Array
 
-        class Outer(PyTreeNode):
+        class Outer(FrozenPyTreeNode):
             inner: Inner
             data: jax.Array
 

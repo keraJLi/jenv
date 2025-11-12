@@ -1,38 +1,53 @@
+import dataclasses
 import warnings
 from copy import copy
-from dataclasses import InitVar
 from functools import cached_property
 from typing import override
 
 from brax.envs import Env as BraxEnv
+from brax.envs import Wrapper as BraxWrapper
 from brax.envs import create as brax_create
 from jax import numpy as jnp
 
 from jenv import spaces
-from jenv.environment import Environment, State, StepInfo
+from jenv.environment import Environment, Info, InfoContainer, State
 from jenv.struct import static_field
 from jenv.typing import Key, PyTree
+
+
+class BraxInfo(InfoContainer):
+    @property
+    def terminated(self) -> bool:
+        return self.done
 
 
 class BraxJenv(Environment):
     """Wrapper to convert a Brax environment to a jenv environment."""
 
-    env_name: InitVar[str]
-    brax_env: BraxEnv = static_field(init=False)
+    brax_env: BraxEnv = static_field()
 
-    def __post_init__(self, env_name: str) -> "BraxJenv":
-        brax_env = brax_create(env_name, episode_length=None, auto_reset=False)
-        object.__setattr__(self, "brax_env", brax_env)
+    @classmethod
+    def from_name(cls, env_name: str, **kwargs) -> "BraxJenv":
+        env = brax_create(env_name, episode_length=None, auto_reset=False)
+        return cls(brax_env=env, **kwargs)
+
+    def __post_init__(self) -> "BraxJenv":
+        if isinstance(self.brax_env, BraxWrapper):
+            warnings.warn(
+                "Environment wrapping should be handled by jenv. "
+                "Unwrapping brax environment before converting..."
+            )
+            object.__setattr__(self, "brax_env", self.brax_env.unwrapped)
 
     @override
-    def reset(self, key: Key) -> tuple[State, StepInfo]:
+    def reset(self, key: Key) -> tuple[State, Info]:
         brax_state = self.brax_env.reset(key)
-        return brax_state, brax_state
+        return brax_state, BraxInfo(**dataclasses.asdict(brax_state))
 
     @override
-    def step(self, state: State, action: PyTree) -> tuple[State, StepInfo]:
+    def step(self, state: State, action: PyTree) -> tuple[State, Info]:
         brax_state = self.brax_env.step(state, action)
-        return brax_state, brax_state
+        return brax_state, BraxInfo(**dataclasses.asdict(brax_state))
 
     @override
     @cached_property

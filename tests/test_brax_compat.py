@@ -5,20 +5,20 @@ import jax.numpy as jnp
 import pytest
 
 from jenv.compat.brax_jenv import BraxJenv
-from jenv.environment import State, StepInfo
+from jenv.environment import Info
 
 
 def test_brax2jenv_wrapper():
     """Test that Brax2Jenv wrapper correctly wraps a Brax environment."""
     # Create a Brax2Jenv wrapper with the ant environment
-    env = BraxJenv(env_name="ant")
+    env = BraxJenv.from_name("fast")
 
     # Test reset
     key = jax.random.PRNGKey(0)
     state, step_info = env.reset(key)
 
     # Check that info has the correct structure
-    assert isinstance(step_info, StepInfo)
+    assert isinstance(step_info, Info)
 
     # Check initial values
     assert not step_info.done
@@ -32,7 +32,7 @@ def test_brax2jenv_wrapper():
     next_state, next_step_info = env.step(state, action)
 
     # Check that next_state has the correct structure
-    assert isinstance(next_step_info, StepInfo)
+    assert isinstance(next_step_info, Info)
 
     # Check that observation is in observation space
     assert env.observation_space.contains(next_step_info.obs)
