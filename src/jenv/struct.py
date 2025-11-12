@@ -1,12 +1,11 @@
-from dataclasses import dataclass as _dataclass
-from dataclasses import field as _dc_field
-from dataclasses import fields as _dc_fields
-from dataclasses import replace as _dc_replace
-from typing import Any, Dict, Tuple
+import dataclasses
+from typing import Any, Dict
 
 import jax
 
-__all__ = ["PyTreeNode", "field", "static_field"]
+from jenv.typing import PyTree
+
+__all__ = ["FrozenPyTreeNode", "field", "static_field", "Container"]
 
 
 def field(*, pytree_node: bool = True, **kwargs):
@@ -16,7 +15,7 @@ def field(*, pytree_node: bool = True, **kwargs):
     """
     meta = dict(kwargs.pop("metadata", {}) or {})
     meta["pytree_node"] = pytree_node
-    return _dc_field(metadata=meta, **kwargs)
+    return dataclasses.field(metadata=meta, **kwargs)
 
 
 def static_field(**kwargs):
@@ -24,12 +23,12 @@ def static_field(**kwargs):
     return field(pytree_node=False, **kwargs)
 
 
-class PyTreeNode:
+class FrozenPyTreeNode:
     """
     Frozen dataclass base that is a JAX pytree node.
 
     Usage:
-        class Foo(PyTreeNode):
+        class Foo(FrozenPyTreeNode):
             a: Any                      # pytree leaf
             b: int = static_field()     # static, not a leaf
 
@@ -46,15 +45,15 @@ class PyTreeNode:
         opts = dict(frozen=True, eq=True, repr=True, slots=False)
         if dataclass_kwargs:
             opts.update(dataclass_kwargs)
-        _dataclass(cls, **opts)  # modify in place
+        dataclasses.dataclass(cls, **opts)  # modify in place
         cls.__is_jenv_pytreenode__ = True
         jax.tree_util.register_pytree_node_class(cls)
 
-    # pytree protocol
-    def tree_flatten(self) -> Tuple[Tuple[Any, ...], Tuple[Any, ...]]:
+    # pytree protocol honoring static_field (metadata["pytree_node"]=False)
+    def tree_flatten(self):
         children = []
         static = []
-        for f in _dc_fields(self):
+        for f in dataclasses.fields(self):
             v = getattr(self, f.name)
             if f.metadata.get("pytree_node", True):
                 children.append(v)
@@ -64,11 +63,11 @@ class PyTreeNode:
         return tuple(children), tuple(static)
 
     @classmethod
-    def tree_unflatten(cls, aux_data: Tuple[Any, ...], children: Tuple[Any, ...]):
+    def tree_unflatten(cls, aux_data, children):
         vals: Dict[str, Any] = {}
         it_children = iter(children)
         it_static = iter(aux_data)
-        for f in _dc_fields(cls):
+        for f in dataclasses.fields(cls):
             if f.metadata.get("pytree_node", True):
                 vals[f.name] = next(it_children)
             else:
@@ -77,4 +76,24 @@ class PyTreeNode:
 
     # convenience
     def replace(self, **changes):
-        return _dc_replace(self, **changes)
+        return dataclasses.replace(self, **changes)
+
+
+@jax.tree_util.register_pytree_node_class
+class Container:
+    def __init__(self, **fields):
+        self._fields = fields
+
+    def __getattr__(self, name: str) -> PyTree:
+        return self._fields[name]
+
+    def update(self, **changes: PyTree) -> "Container":
+        new_fields = {**self._fields, **changes}
+        return self.__class__(**new_fields)
+
+    def tree_flatten(self):
+        return self._fields.values(), self._fields.keys()
+
+    @classmethod
+    def tree_unflatten(cls, keys, values):
+        return cls(**dict(zip(keys, values)))
