@@ -27,17 +27,6 @@ Documentation = "https://github.com/keraJLi/jenv#readme"
 Issues = "https://github.com/keraJLi/jenv/issues"
 Changelog = "https://github.com/keraJLi/jenv/releases"
 
-[project.optional-dependencies]
-# Compatibility wrappers for various RL environments
-compat = [
-    "brax>=0.11.0",
-    "craftax>=1.4.3",
-    "navix>=0.7.0",
-    "jumanji>=1.0.1",
-    "gymnasium>=1.0.0",
-    "kinetix-env>=2.0.0",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

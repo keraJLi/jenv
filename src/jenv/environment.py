@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import field
 from functools import cached_property
 from typing import Protocol, runtime_checkable
 
@@ -24,23 +25,7 @@ class InfoContainer(Container):
     obs: PyTree
     reward: float
     terminated: bool
-    truncated: bool
-
-    @property
-    def obs(self) -> PyTree:
-        return self._fields["obs"]
-
-    @property
-    def reward(self) -> float:
-        return self._fields["reward"]
-
-    @property
-    def terminated(self) -> bool:
-        return self._fields["terminated"]
-
-    @property
-    def truncated(self) -> bool:
-        return self._fields.get("truncated", False)
+    truncated: bool = field(default=False)
 
 
 # State remains a general PyTree alias; environments are not forced to WrappedState

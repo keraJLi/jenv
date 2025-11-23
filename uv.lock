@@ -1010,16 +1010,6 @@ dependencies = [
     { name = "jax" },
 ]
 
-[package.optional-dependencies]
-compat = [
-    { name = "brax" },
-    { name = "craftax" },
-    { name = "gymnasium" },
-    { name = "jumanji" },
-    { name = "kinetix-env" },
-    { name = "navix" },
-]
-
 [package.dev-dependencies]
 compat = [
     { name = "brax" },
@@ -1036,16 +1026,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "brax", marker = "extra == 'compat'", specifier = ">=0.11.0" },
-    { name = "craftax", marker = "extra == 'compat'", specifier = ">=1.4.3" },
-    { name = "gymnasium", marker = "extra == 'compat'", specifier = ">=1.0.0" },
-    { name = "jax", specifier = ">=0.5.0" },
-    { name = "jumanji", marker = "extra == 'compat'", specifier = ">=1.0.1" },
-    { name = "kinetix-env", marker = "extra == 'compat'", specifier = ">=2.0.0" },
-    { name = "navix", marker = "extra == 'compat'", specifier = ">=0.7.0" },
-]
-provides-extras = ["compat"]
+requires-dist = [{ name = "jax", specifier = ">=0.5.0" }]
 
 [package.metadata.requires-dev]
 compat = [

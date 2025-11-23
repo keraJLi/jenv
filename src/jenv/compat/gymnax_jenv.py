@@ -8,7 +8,7 @@ from gymnax.environments.environment import Environment as GymnaxEnv
 
 from jenv import spaces as jenv_spaces
 from jenv.environment import Environment, Info, InfoContainer, State
-from jenv.struct import static_field
+from jenv.struct import Container, static_field
 from jenv.typing import Key, PyTree
 
 
@@ -28,7 +28,7 @@ class GymnaxJenv(Environment):
     def reset(self, key: Key) -> tuple[State, Info]:
         key, subkey = jax.random.split(key)
         obs, env_state = self.gymnax_env.reset(subkey, self.env_params)
-        state = GymnaxContainer(key=key, env_state=env_state)
+        state = Container(key=key, env_state=env_state)
         return state, InfoContainer(obs=obs, reward=0.0, terminated=False)
 
     @override

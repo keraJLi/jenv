@@ -3,12 +3,12 @@ from typing import override
 import jax
 from jax import numpy as jnp
 
-from jenv.environment import Info
+from jenv.environment import Info, State
 from jenv.spaces import BatchedSpace, PyTreeSpace, Space
 from jenv.struct import static_field
 from jenv.typing import Key, PyTree
 from jenv.wrappers.normalization import RunningMeanVar, update_rmv
-from jenv.wrappers.wrapper import WrappedState, Wrapper
+from jenv.wrappers.wrapper import Wrapper
 
 
 class ObservationNormalizationWrapper(Wrapper):
@@ -44,41 +44,35 @@ class ObservationNormalizationWrapper(Wrapper):
 
         return jax.tree.map(norm_leaf, obs, rmv.mean, rmv.std, self.stats_spec)
 
-    def _normalize_and_update(
-        self, state: WrappedState, info: Info
-    ) -> tuple[WrappedState, Info]:
+    def _normalize_and_update(self, state: State, info: Info) -> tuple[State, Info]:
         # Ensure each observation leaf is shaped as (-1, *spec.shape)
         reshaped_obs = jax.tree.map(
             lambda x, spec: x.reshape((-1,) + tuple(spec.shape)),
             info.obs,
             self.stats_spec,
         )
-        rmv_state = update_rmv(
-            getattr(state.persistent, "obs_rmv_state", self._init_rmv_state()),
-            reshaped_obs,
-        )
+        rmv_state = update_rmv(state.persistent.obs_rmv_state, reshaped_obs)
         norm_obs = self._normalize_obs(info.obs, rmv_state)
 
-        state = state.update(
-            persistent=state.persistent.update(obs_rmv_state=rmv_state)
-        )
+        persistent = state.persistent.update(obs_rmv_state=rmv_state)
+        state = state.update(persistent=persistent)
         info = info.update(obs=norm_obs, unnormalized_obs=info.obs)
         return state, info
 
     @override
-    def reset(self, key: Key) -> tuple[WrappedState, Info]:
+    def reset(self, key: Key) -> tuple[State, Info]:
         state, info = self.env.reset(key)
         rmv_state = getattr(state.persistent, "obs_rmv_state", self._init_rmv_state())
-        next_state = state.update(
-            persistent=state.persistent.update(obs_rmv_state=rmv_state)
-        )
+        persistent = state.persistent.update(obs_rmv_state=rmv_state)
+        next_state = state.update(persistent=persistent)
         return self._normalize_and_update(next_state, info)
 
     @override
-    def step(self, state: WrappedState, action: PyTree) -> tuple[WrappedState, Info]:
+    def step(self, state: State, action: PyTree) -> tuple[State, Info]:
         next_state, info = self.env.step(state, action)
-        # carry forward persistent (including rmv state) before update
-        next_state = next_state.update(persistent=state.persistent)
+        rmv_state = state.persistent.obs_rmv_state
+        persistent = next_state.persistent.update(obs_rmv_state=rmv_state)
+        next_state = next_state.update(persistent=persistent)
         return self._normalize_and_update(next_state, info)
 
 

@@ -15,12 +15,6 @@ from jenv.struct import static_field
 from jenv.typing import Key, PyTree
 
 
-class BraxInfo(InfoContainer):
-    @property
-    def terminated(self) -> bool:
-        return self.done
-
-
 class BraxJenv(Environment):
     """Wrapper to convert a Brax environment to a jenv environment."""
 
@@ -42,12 +36,18 @@ class BraxJenv(Environment):
     @override
     def reset(self, key: Key) -> tuple[State, Info]:
         brax_state = self.brax_env.reset(key)
-        return brax_state, BraxInfo(**dataclasses.asdict(brax_state))
+        info = InfoContainer(obs=brax_state.obs, reward=0.0, terminated=False)
+        info = info.update(**dataclasses.asdict(brax_state))
+        return brax_state, info
 
     @override
     def step(self, state: State, action: PyTree) -> tuple[State, Info]:
         brax_state = self.brax_env.step(state, action)
-        return brax_state, BraxInfo(**dataclasses.asdict(brax_state))
+        info = InfoContainer(
+            obs=brax_state.obs, reward=brax_state.reward, terminated=brax_state.done
+        )
+        info = info.update(**dataclasses.asdict(brax_state))
+        return brax_state, info
 
     @override
     @cached_property

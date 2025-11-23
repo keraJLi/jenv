@@ -1,5 +1,6 @@
 import dataclasses
-from typing import Any, Dict
+from dataclasses import KW_ONLY
+from typing import Any, Dict, Iterable, Iterator, Mapping, Self, Tuple, TypeVar, cast
 
 import jax
 
@@ -80,31 +81,84 @@ class FrozenPyTreeNode:
 
 
 @jax.tree_util.register_pytree_node_class
+@dataclasses.dataclass(frozen=True, eq=True, repr=True, slots=False)
 class Container:
-    def __init__(self, **fields):
-        self._fields = fields
+    _: KW_ONLY
+    _extras: Mapping[str, PyTree] = dataclasses.field(default_factory=dict, repr=False)
 
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
+    def __init_subclass__(cls, *, dataclass_kwargs: Dict[str, Any] | None = None, **kw):
+        super().__init_subclass__(**kw)
+        if "__is_container_dataclass__" in cls.__dict__:
+            return
+
+        opts = dict(frozen=True, eq=True, repr=True, slots=False)
+        if dataclass_kwargs:
+            opts.update(dataclass_kwargs)
+
+        dataclasses.dataclass(cls, **opts)
+        cls.__is_container_dataclass__ = True
         jax.tree_util.register_pytree_node_class(cls)
 
     def __getattr__(self, name: str) -> PyTree:
-        # Avoid recursion during pickling/unpickling or early init before _fields exists
-        fields = self.__dict__.get("_fields", None)
-        if fields is not None:
-            try:
-                return fields[name]
-            except KeyError:
-                pass
-        raise AttributeError(name)
+        # bypass __getattr__ when accessing _extras to avoid recursion
+        extras = object.__getattribute__(self, "_extras")
+        if name in extras:
+            return extras[name]
+        self_name = type(self).__name__
+        raise AttributeError(f"'{self_name}' object has no attribute '{name}'")
 
-    def update(self, **changes: PyTree) -> "Container":
-        new_fields = {**self._fields, **changes}
-        return self.__class__(**new_fields)
+    def __dir__(self) -> Iterable[str]:
+        core_names = {f.name for f in dataclasses.fields(self) if f.name != "_extras"}
+        return sorted(set(super().__dir__()) | core_names | set(self._extras.keys()))
 
-    def tree_flatten(self):
-        return self._fields.values(), self._fields.keys()
+    def __iter__(self) -> Iterator[Tuple[str, PyTree]]:
+        for f in dataclasses.fields(self):
+            if f.name == "_extras":
+                continue
+            yield (f.name, getattr(self, f.name))
+        # extras
+        for k, v in self._extras.items():
+            yield (k, v)
+
+    def update(self, **changes: PyTree) -> Self:
+        core_names = {f.name for f in dataclasses.fields(self) if f.name != "_extras"}
+        core_updates: Dict[str, PyTree] = {}
+        extras_updates: Dict[str, PyTree] = {}
+
+        for k, v in changes.items():
+            if k in core_names:
+                core_updates[k] = v
+            else:
+                extras_updates[k] = v
+
+        new = dataclasses.replace(self, **core_updates)
+        new_extras = {**self._extras, **extras_updates}
+        object.__setattr__(new, "_extras", new_extras)
+        return new
+
+    def tree_flatten(self) -> Tuple[Tuple[PyTree, ...], Tuple[Any, ...]]:
+        core_fields = [f for f in dataclasses.fields(self) if f.name != "_extras"]
+        core_keys = tuple(f.name for f in core_fields)
+        core_vals = tuple(getattr(self, name) for name in core_keys)
+
+        extras_keys = tuple(self._extras.keys())
+        extras_vals = tuple(self._extras[k] for k in extras_keys)
+
+        children = core_vals + extras_vals
+        aux_data = (self.__class__, core_keys, extras_keys)
+        return children, aux_data
 
     @classmethod
-    def tree_unflatten(cls, keys, values):
-        return cls(**dict(zip(keys, values)))
+    def tree_unflatten(cls, aux_data, children: Tuple[PyTree, ...]) -> Self:
+        actual_cls, core_keys, extras_keys = aux_data
+        n_core = len(core_keys)
+
+        core_vals = children[:n_core]
+        extras_vals = children[n_core:]
+
+        core_kwargs = dict(zip(core_keys, core_vals))
+        extras = dict(zip(extras_keys, extras_vals))
+
+        obj = actual_cls(**core_kwargs)
+        object.__setattr__(obj, "_extras", extras)
+        return obj

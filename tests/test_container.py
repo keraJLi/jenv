@@ -1,12 +1,14 @@
-"""Robust tests for jenv.struct.Container (JAX pytree dict-like container)."""
+"""Robust tests for jenv.struct.Container (JAX pytree dataclass container)."""
 
 import pickle
+from dataclasses import KW_ONLY
 
 import jax
 import jax.numpy as jnp
 import pytest
 
 from jenv.struct import Container
+from jenv.typing import PyTree
 
 # ============================================================================
 # Container subclasses used across tests
@@ -16,19 +18,39 @@ from jenv.struct import Container
 class InfoLike(Container):
     """Simple Container subclass to validate pytree behavior and attribute access."""
 
-    pass
+    _: KW_ONLY
+    a: PyTree
+    b: PyTree
 
 
 class BaseContainer(Container):
     """Base Container for subclass auto-registration tests."""
 
-    pass
+    _: KW_ONLY
+    x: PyTree
 
 
 class DerivedContainer(BaseContainer):
     """Derived Container for subclass auto-registration tests."""
 
-    pass
+    _: KW_ONLY
+    y: PyTree
+
+
+class SimpleContainer(Container):
+    """Generic Container used in tests."""
+
+    _: KW_ONLY
+    x: PyTree
+    y: PyTree
+
+
+class OuterContainer(Container):
+    """Container that nests another container."""
+
+    _: KW_ONLY
+    inner: InfoLike
+    z: PyTree
 
 
 # ============================================================================
@@ -74,7 +96,7 @@ def test_container_update_returns_new_and_preserves_class():
 
 def test_container_tree_flatten_unflatten_round_trip():
     """tree_flatten / tree_unflatten should round-trip a Container accurately."""
-    cont = Container(x=jnp.array([1.0, 2.0]), y=jnp.array([3.0, 4.0]))
+    cont = SimpleContainer(x=jnp.array([1.0, 2.0]), y=jnp.array([3.0, 4.0]))
 
     children, treedef = jax.tree_util.tree_flatten(cont)
     assert len(children) == 2
@@ -82,16 +104,15 @@ def test_container_tree_flatten_unflatten_round_trip():
     assert jnp.allclose(children[1], jnp.array([3.0, 4.0]))
 
     reconstructed = jax.tree_util.tree_unflatten(treedef, children)
-    assert isinstance(reconstructed, Container)
+    assert isinstance(reconstructed, SimpleContainer)
     assert jnp.allclose(reconstructed.x, cont.x)
     assert jnp.allclose(reconstructed.y, cont.y)
 
 
 def test_container_treedef_and_leaf_order_behavior():
-    """Treedefs for Container are equal across key orders; leaf order follows insertion."""
-    # Two containers with same keys/values but different insertion order
-    c1 = Container(a=jnp.array([1]), b=jnp.array([2]))
-    c2 = Container(b=jnp.array([2]), a=jnp.array([1]))
+    """Treedefs depend on declared dataclass fields; keyword order should not matter."""
+    c1 = SimpleContainer(x=jnp.array([1]), y=jnp.array([2]))
+    c2 = SimpleContainer(y=jnp.array([2]), x=jnp.array([1]))
 
     children1, treedef1 = jax.tree_util.tree_flatten(c1)
     children2, treedef2 = jax.tree_util.tree_flatten(c2)
@@ -99,20 +120,20 @@ def test_container_treedef_and_leaf_order_behavior():
     # Treedef equality: JAX treedef comparison ignores aux data for custom nodes
     assert treedef1 == treedef2
 
-    # Leaf order follows insertion order
+    # Leaf order follows class field order (x before y) regardless of kwargs order
     assert jnp.allclose(children1[0], jnp.array([1]))
     assert jnp.allclose(children1[1], jnp.array([2]))
-    assert jnp.allclose(children2[0], jnp.array([2]))  # swapped
-    assert jnp.allclose(children2[1], jnp.array([1]))
+    assert jnp.allclose(children2[0], jnp.array([1]))
+    assert jnp.allclose(children2[1], jnp.array([2]))
 
     # Both still round-trip correctly with their treedefs
     rec1 = jax.tree_util.tree_unflatten(treedef1, children1)
-    assert jnp.allclose(rec1.a, c1.a)
-    assert jnp.allclose(rec1.b, c1.b)
+    assert jnp.allclose(rec1.x, c1.x)
+    assert jnp.allclose(rec1.y, c1.y)
 
     rec2 = jax.tree_util.tree_unflatten(treedef2, children2)
-    assert jnp.allclose(rec2.a, c2.a)
-    assert jnp.allclose(rec2.b, c2.b)
+    assert jnp.allclose(rec2.x, c2.x)
+    assert jnp.allclose(rec2.y, c2.y)
 
 
 # ============================================================================
@@ -140,17 +161,17 @@ def test_container_vmap_over_function_returning_container_subclass():
 def test_container_vmap_over_container_input_and_output():
     """vmap over a function taking a Container and returning a Container."""
 
-    def step(c: Container) -> Container:
-        return Container(sum=c.x + c.y, diff=c.x - c.y)
+    def step(c: SimpleContainer) -> SimpleContainer:
+        return SimpleContainer(x=c.x + c.y, y=c.x - c.y)
 
-    batched = Container(
+    batched = SimpleContainer(
         x=jnp.array([1.0, 2.0, 3.0]),
         y=jnp.array([10.0, 20.0, 30.0]),
     )
     out = jax.vmap(step)(batched)
 
-    assert jnp.allclose(out.sum, jnp.array([11.0, 22.0, 33.0]))
-    assert jnp.allclose(out.diff, jnp.array([-9.0, -18.0, -27.0]))
+    assert jnp.allclose(out.x, jnp.array([11.0, 22.0, 33.0]))
+    assert jnp.allclose(out.y, jnp.array([-9.0, -18.0, -27.0]))
 
 
 def test_container_jit_works_with_input_and_return():
@@ -184,7 +205,7 @@ def test_container_subclass_auto_registered_vmap_nested():
 def test_container_nested_containers_tree_map_and_roundtrip():
     """Nested Containers should participate in tree operations."""
     inner = InfoLike(a=jnp.array([1.0]), b=jnp.array([2.0]))
-    outer = Container(inner=inner, z=jnp.array([3.0]))
+    outer = OuterContainer(inner=inner, z=jnp.array([3.0]))
 
     scaled = jax.tree.map(lambda x: x * 10, outer)
     assert jnp.allclose(scaled.inner.a, jnp.array([10.0]))
