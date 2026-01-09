@@ -162,3 +162,7 @@ cython_debug/
 
 # Weights and Biases
 wandb/
+
+# Cursor
+.cursorignore
+AGENTS.md
