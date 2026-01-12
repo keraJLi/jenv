@@ -2,7 +2,7 @@ import dataclasses
 import warnings
 from copy import copy
 from functools import cached_property
-from typing import override
+from typing import Any, override
 
 from brax.envs import Env as BraxEnv
 from brax.envs import Wrapper as BraxWrapper
@@ -21,8 +21,28 @@ class BraxJenv(Environment):
     brax_env: BraxEnv = static_field()
 
     @classmethod
-    def from_name(cls, env_name: str, **kwargs) -> "BraxJenv":
-        env = brax_create(env_name, episode_length=None, auto_reset=False)
+    def from_name(
+        cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
+    ) -> "BraxJenv":
+        env_kwargs = env_kwargs or {}
+
+        if "episode_length" in env_kwargs and env_kwargs["episode_length"] < jnp.inf:
+            warnings.warn(
+                "Creating a BraxJenv with a finite episode_length is not recommended, "
+                "as brax does not differentiate between truncation and termination. "
+            )
+
+        if "auto_reset" in env_kwargs and env_kwargs["auto_reset"]:
+            warnings.warn(
+                "Creating a BraxJenv with auto_reset=True is not recommended, use "
+                "an AutoResetWrapper instead."
+            )
+
+        # Setting default values for episode_length and auto_reset
+        env_kwargs["episode_length"] = env_kwargs.get("episode_length", jnp.inf)
+        env_kwargs["auto_reset"] = env_kwargs.get("auto_reset", False)
+
+        env = brax_create(env_name, **env_kwargs)
         return cls(brax_env=env, **kwargs)
 
     def __post_init__(self) -> "BraxJenv":
@@ -53,7 +73,9 @@ class BraxJenv(Environment):
     @cached_property
     def action_space(self) -> spaces.Space:
         # All brax environments have action limit of -1 to 1
-        return spaces.Continuous.from_shape(low=-1.0, high=1.0, shape=(self.brax_env.action_size,))
+        return spaces.Continuous.from_shape(
+            low=-1.0, high=1.0, shape=(self.brax_env.action_size,)
+        )
 
     @override
     @cached_property

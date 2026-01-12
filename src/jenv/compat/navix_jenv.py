@@ -1,6 +1,7 @@
 import dataclasses
+import warnings
 from functools import cached_property
-from typing import override
+from typing import Any, override
 
 import jax.numpy as jnp
 import navix
@@ -15,29 +16,47 @@ from jenv.typing import Key, PyTree
 class NavixJenv(Environment):
     navix_env: NavixEnv
 
+    @classmethod
+    def from_name(
+        cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
+    ) -> "NavixJenv":
+        env_kwargs = env_kwargs or {}
+
+        if "max_steps" in env_kwargs and env_kwargs["max_steps"] < jnp.inf:
+            warnings.warn(
+                "Creating a NavixJenv with a finite max_steps is not recommended, use "
+                "a TruncationWrapper instead."
+            )
+
+        # Setting default value for max_steps
+        env_kwargs["max_steps"] = env_kwargs.get("max_steps", jnp.inf)
+
+        navix_env = navix.make(env_name, **env_kwargs)
+        return cls(navix_env=navix_env, **kwargs)
+
     @override
     def reset(self, key: Key) -> tuple[State, Info]:
         timestep = self.navix_env.reset(key)
-        return timestep, _convert_container(timestep)
+        return timestep, convert_navix_to_jenv_info(timestep)
 
     @override
     def step(self, state: State, action: PyTree) -> tuple[State, Info]:
         timestep = self.navix_env.step(state, action)
-        return timestep, _convert_container(timestep)
+        return timestep, convert_navix_to_jenv_info(timestep)
 
     @override
     @cached_property
     def action_space(self) -> jenv_spaces.Space:
-        return _convert_space(self.navix_env.action_space)
+        return convert_navix_to_jenv_space(self.navix_env.action_space)
 
     @override
     @cached_property
     def observation_space(self) -> jenv_spaces.Space:
-        return _convert_space(self.navix_env.observation_space)
+        return convert_navix_to_jenv_space(self.navix_env.observation_space)
 
 
-def _convert_container(nvx_container: navix.Timestep) -> InfoContainer:
-    timestep_dict = dataclasses.asdict(nvx_container)
+def convert_navix_to_jenv_info(nvx_timestep: navix.Timestep) -> InfoContainer:
+    timestep_dict = dataclasses.asdict(nvx_timestep)
     step_type = timestep_dict.pop("step_type")
     info = InfoContainer(
         obs=timestep_dict.pop("observation"),
@@ -49,7 +68,9 @@ def _convert_container(nvx_container: navix.Timestep) -> InfoContainer:
     return info
 
 
-def _convert_space(nvx_space: navix_spaces.Space) -> jenv_spaces.Space:
+def convert_navix_to_jenv_space(
+    nvx_space: navix_spaces.Space,
+) -> jenv_spaces.Space:
     if isinstance(nvx_space, navix_spaces.Discrete):
         n = jnp.asarray(nvx_space.n).astype(nvx_space.dtype)
         return jenv_spaces.Discrete.from_shape(n, shape=nvx_space.shape)

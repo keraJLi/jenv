@@ -7,7 +7,7 @@ import pytest
 
 from jenv.compat.navix_jenv import NavixJenv
 from jenv.environment import Info
-from jenv.spaces import Discrete
+from jenv.spaces import Continuous, Discrete
 
 
 def _create_navix_env(env_name: str = "Navix-Empty-5x5-v0", **kwargs):
@@ -363,3 +363,74 @@ def test_action_sampling():
     assert final_state is not None
     assert step_infos.reward.shape == (num_actions,)
     assert isinstance(step_infos, Info)  # step_infos is a batched InfoContainer
+
+
+def test_from_name_creation():
+    """Test NavixJenv.from_name() for creating environments."""
+    # Test basic from_name creation
+    env = NavixJenv.from_name("Navix-Empty-5x5-v0")
+    assert env is not None
+    assert isinstance(env.action_space, Discrete)
+    assert isinstance(env.observation_space, Discrete)
+
+    # Test reset and step work
+    key = jax.random.PRNGKey(0)
+    state, info = env.reset(key)
+    assert state is not None
+    assert isinstance(info, Info)
+
+
+def test_from_name_with_max_steps_warning():
+    """Test that from_name warns when using finite max_steps."""
+    # Test warning for finite max_steps
+    with pytest.warns(
+        UserWarning,
+        match="Creating a NavixJenv with a finite max_steps is not recommended",
+    ):
+        env = NavixJenv.from_name("Navix-Empty-5x5-v0", env_kwargs={"max_steps": 100})
+
+    # Environment should still be created
+    assert env is not None
+    key = jax.random.PRNGKey(0)
+    state, info = env.reset(key)
+    assert state is not None
+
+
+def text_discrete_space_conversion():
+    """Test conversion of discrete spaces from navix to jenv."""
+    from navix import spaces as navix_spaces
+
+    from jenv.compat.navix_jenv import convert_navix_to_jenv_space
+
+    # Create a navix Discrete space
+    navix_discrete = navix_spaces.Discrete(n=10, shape=(3,), dtype=jnp.int32)
+    jenv_discrete = convert_navix_to_jenv_space(navix_discrete)
+    assert isinstance(jenv_discrete, Discrete)
+    assert jenv_discrete.n == navix_discrete.n
+    assert jenv_discrete.shape == navix_discrete.shape
+    assert jenv_discrete.dtype == navix_discrete.dtype
+
+
+def test_continuous_space_conversion():
+    """Test conversion of continuous spaces from navix to jenv."""
+    from navix import spaces as navix_spaces
+
+    from jenv.compat.navix_jenv import convert_navix_to_jenv_space
+
+    # Create a navix Continuous space
+    navix_continuous = navix_spaces.Continuous(
+        shape=(3,),
+        dtype=jnp.float32,
+        minimum=jnp.array([-1.0, -2.0, -3.0]),
+        maximum=jnp.array([1.0, 2.0, 3.0]),
+    )
+
+    # Convert to jenv space
+    jenv_continuous = convert_navix_to_jenv_space(navix_continuous)
+
+    # Verify conversion
+    assert isinstance(jenv_continuous, Continuous)
+    assert jenv_continuous.shape == navix_continuous.shape
+    assert jenv_continuous.dtype == navix_continuous.dtype
+    assert jnp.array_equal(jenv_continuous.low, navix_continuous.minimum)
+    assert jnp.array_equal(jenv_continuous.high, navix_continuous.maximum)

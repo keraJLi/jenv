@@ -232,6 +232,37 @@ def test_from_name_creation():
     assert env_fast.action_space.shape != env_ant.action_space.shape
 
 
+def test_from_name_with_episode_length_warning():
+    """Test that from_name warns when using finite episode_length."""
+    # Test warning for finite episode_length
+    with pytest.warns(
+        UserWarning,
+        match="Creating a BraxJenv with a finite episode_length is not recommended",
+    ):
+        env = BraxJenv.from_name("fast", env_kwargs={"episode_length": 100})
+
+    # Environment should still be created
+    assert env is not None
+    key = jax.random.PRNGKey(0)
+    state, info = env.reset(key)
+    assert state is not None
+
+
+def test_from_name_with_auto_reset_warning():
+    """Test that from_name warns when using auto_reset=True."""
+    # Test warning for auto_reset=True
+    with pytest.warns(
+        UserWarning, match="Creating a BraxJenv with auto_reset=True is not recommended"
+    ):
+        env = BraxJenv.from_name("fast", env_kwargs={"auto_reset": True})
+
+    # Environment should still be created
+    assert env is not None
+    key = jax.random.PRNGKey(0)
+    state, info = env.reset(key)
+    assert state is not None
+
+
 def test_wrapper_unwrapping():
     """Test that wrapped Brax environments are properly unwrapped."""
     from brax.envs import create as brax_create
