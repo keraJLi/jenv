@@ -16,7 +16,6 @@ import jax.numpy as jnp
 
 from jenv.environment import Info
 
-
 ObsCheck = Callable[[object, object], None]
 
 
@@ -59,22 +58,23 @@ def assert_reset_step_contract(
     obs_check(next_info.obs, env.observation_space)
 
 
-def assert_scan_rollout_contract(
+def assert_jitted_rollout_contract(
     env,
     *,
     key: jax.Array,
     num_steps: int,
 ) -> None:
-    state, _ = env.reset(key)
-    action_keys = jax.random.split(key, num_steps)
+    """Contract: rollout works under `jax.jit` and produces a valid `Info` container."""
+    reset_jit = jax.jit(env.reset)
+    step_jit = jax.jit(env.step)
+
+    key_reset, key_rollout = jax.random.split(key)
+    state, _ = reset_jit(key_reset)
+    action_keys = jax.random.split(key_rollout, num_steps)
     actions = jax.vmap(env.action_space.sample)(action_keys)
+    final_state, infos = jax.lax.scan(step_jit, state, actions)
 
-    def step_fn(s, a):
-        return env.step(s, a)
-
-    final_state, infos = jax.lax.scan(step_fn, state, actions)
     assert final_state is not None
     assert_info_has_contract_fields(infos)
     assert infos.reward.shape == (num_steps,)
     assert jnp.all(jnp.isfinite(jnp.asarray(infos.reward)))
-

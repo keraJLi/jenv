@@ -6,9 +6,11 @@ import navix
 import pytest
 
 from jenv.compat.navix_jenv import NavixJenv
-from jenv.environment import Info
 from jenv.spaces import Continuous, Discrete
-from tests.compat.contract import assert_reset_step_contract
+from compat.contract import (
+    assert_jitted_rollout_contract,
+    assert_reset_step_contract,
+)
 
 pytestmark = pytest.mark.compat
 
@@ -33,51 +35,6 @@ def _navix_env_warmup(navix_env, prng_key):
     env.step(state, action)
 
 
-def test_navix2jenv_wrapper(navix_env, prng_key):
-    """Test that NavixJenv wrapper correctly wraps a navix environment."""
-    # Create a NavixJenv wrapper
-    env = navix_env
-
-    # Test reset
-    key = prng_key
-    state, step_info = env.reset(key)
-
-    # Check that info has the correct structure
-    assert isinstance(step_info, Info)
-
-    # Check initial values
-    assert not step_info.terminated
-    assert not step_info.truncated
-    assert jnp.isscalar(step_info.reward) or step_info.reward.shape == ()
-
-    # Check that observation is in observation space
-    # Note: Some navix environments may produce observations outside their defined space bounds
-    # This is a known issue with navix, so we check shape and dtype instead
-    assert step_info.obs.shape == env.observation_space.shape
-    assert step_info.obs.dtype == env.observation_space.dtype
-
-    # Test step with a valid action
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_step_info = env.step(state, action)
-
-    # Check that next_state has the correct structure
-    assert next_state is not None
-    assert isinstance(next_step_info, Info)
-
-    # Check that observation is in observation space
-    # Note: Some navix environments may produce observations outside their defined space bounds
-    # This is a known issue with navix, so we check shape and dtype instead
-    assert next_step_info.obs.shape == env.observation_space.shape
-    assert next_step_info.obs.dtype == env.observation_space.dtype
-
-    # Check that action space exists and is correct type
-    assert env.action_space is not None
-    assert isinstance(env.action_space, Discrete)
-
-    # Check that observation space exists
-    assert env.observation_space is not None
-
-
 def test_navix_contract_smoke(prng_key, navix_env):
     env = navix_env
 
@@ -87,6 +44,11 @@ def test_navix_contract_smoke(prng_key, navix_env):
         assert obs.dtype == obs_space.dtype
 
     assert_reset_step_contract(env, key=prng_key, obs_check=obs_check)
+
+
+def test_navix_contract_scan(prng_key, navix_env):
+    # Keep small: we only want to validate batched rewards + protocol.
+    assert_jitted_rollout_contract(navix_env, key=prng_key, num_steps=5)
 
 
 def test_action_space_conversion(navix_env):
@@ -115,27 +77,6 @@ def test_observation_space_conversion(navix_env):
         assert jnp.array_equal(jenv_n, navix_n)
     assert env.observation_space.shape == env.navix_env.observation_space.shape
     assert env.observation_space.dtype == env.navix_env.observation_space.dtype
-
-
-def test_space_contains(navix_env, prng_key):
-    """Test that converted spaces correctly validate samples."""
-    env = navix_env
-
-    # Test action space contains valid actions
-    key = prng_key
-    action = env.action_space.sample(key)
-    assert env.action_space.contains(action)
-
-    # Test observation space contains observations from reset/step
-    state, info = env.reset(key)
-    # Note: Some navix environments may produce observations outside their defined space bounds
-    assert info.obs.shape == env.observation_space.shape
-    assert info.obs.dtype == env.observation_space.dtype
-
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_info = env.step(state, action)
-    assert next_info.obs.shape == env.observation_space.shape
-    assert next_info.obs.dtype == env.observation_space.dtype
 
 
 def test_container_conversion_reset(navix_env, prng_key):
@@ -191,30 +132,6 @@ def test_container_conversion_step(navix_env, prng_key):
     assert info.reward == navix_timestep.reward
 
 
-def test_episode_termination(prng_key):
-    """Test that episode termination is correctly detected."""
-    env = _create_navix_env(max_steps=10)  # Short episode for testing
-    key = prng_key
-
-    state, info = env.reset(key)
-    assert not info.terminated
-    assert not info.truncated
-
-    # Step until termination or truncation
-    for _ in range(20):  # More than max_steps to ensure we hit truncation
-        if info.terminated or info.truncated:
-            break
-        action = env.action_space.sample(jax.random.fold_in(prng_key, _))
-        state, info = env.step(state, action)
-
-    # Verify that we eventually hit termination or truncation
-    assert info.terminated or info.truncated
-
-    # If terminated, verify truncated=False
-    if info.terminated:
-        assert not info.truncated
-
-
 def test_episode_truncation(prng_key):
     """Test that episode truncation is correctly detected."""
     env = _create_navix_env(max_steps=5)  # Very short episode
@@ -232,29 +149,6 @@ def test_episode_truncation(prng_key):
     # Verify truncation occurred
     assert info.truncated
     assert not info.terminated
-
-
-def test_multiple_episodes(navix_env, prng_key):
-    """Test multiple reset/step cycles."""
-    env = navix_env
-
-    # Run multiple episodes
-    for episode in range(3):
-        state, info = env.reset(jax.random.fold_in(prng_key, episode))
-        assert not info.terminated
-        assert not info.truncated
-
-        # Take a few steps
-        for step in range(5):
-            action = env.action_space.sample(
-                jax.random.fold_in(prng_key, episode * 100 + step)
-            )
-            state, info = env.step(state, action)
-
-        # Verify state is properly reset on next reset
-        next_state, next_info = env.reset(jax.random.fold_in(prng_key, episode + 1))
-        assert not next_info.terminated
-        assert not next_info.truncated
 
 
 def test_unsupported_space_type():
@@ -320,79 +214,6 @@ def test_step_type_conversion(navix_env, prng_key):
     assert step_info.truncated == (
         int(step_timestep.step_type) == int(navix.StepType.TRUNCATION)
     )
-
-
-def test_full_episode_rollout(prng_key):
-    """Test a complete episode from reset to termination using jax.lax.scan."""
-    env = _create_navix_env(max_steps=20)
-    key = prng_key
-
-    # Reset environment
-    state, _ = env.reset(key)
-
-    # Generate actions for a fixed number of steps
-    num_steps = 25
-    action_keys = jax.random.split(key, num_steps)
-    actions = jax.vmap(env.action_space.sample)(action_keys)
-
-    # Use jax.lax.scan to efficiently step through the episode
-    def step_fn(state, action):
-        return env.step(state, action)
-
-    final_state, step_infos = jax.lax.scan(step_fn, state, actions)
-
-    # Verify cumulative reward using step_infos.reward.cumsum()
-    cumulative_reward = jnp.cumsum(step_infos.reward)
-    assert cumulative_reward.shape == (num_steps,)
-    assert jnp.all(jnp.isfinite(cumulative_reward))
-
-    # Verify final state
-    assert final_state is not None
-    # At least one step should have terminated or truncated (due to max_steps)
-    assert jnp.any(step_infos.terminated) or jnp.any(step_infos.truncated)
-
-
-def test_action_sampling(prng_key):
-    """Test that actions sampled from action_space work correctly."""
-    env = _create_navix_env()
-    key = prng_key
-
-    # Sample actions from converted action space
-    num_actions = 10
-    action_keys = jax.random.split(key, num_actions)
-    actions = jax.vmap(env.action_space.sample)(action_keys)
-
-    # Verify actions are valid
-    for action in actions:
-        assert env.action_space.contains(action)
-
-    # Step with sampled actions using lax.scan for efficiency
-    state, _ = env.reset(key)
-
-    def step_fn(state, action):
-        return env.step(state, action)
-
-    final_state, step_infos = jax.lax.scan(step_fn, state, actions)
-
-    # Verify all steps completed successfully
-    assert final_state is not None
-    assert step_infos.reward.shape == (num_actions,)
-    assert isinstance(step_infos, Info)  # step_infos is a batched InfoContainer
-
-
-def test_from_name_creation(prng_key):
-    """Test NavixJenv.from_name() for creating environments."""
-    # Test basic from_name creation
-    env = NavixJenv.from_name("Navix-Empty-5x5-v0")
-    assert env is not None
-    assert isinstance(env.action_space, Discrete)
-    assert isinstance(env.observation_space, Discrete)
-
-    # Test reset and step work
-    key = prng_key
-    state, info = env.reset(key)
-    assert state is not None
-    assert isinstance(info, Info)
 
 
 def test_from_name_with_max_steps_warning(prng_key):

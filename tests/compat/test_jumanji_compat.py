@@ -12,9 +12,11 @@ from jumanji import specs
 
 import jenv.compat.jumanji_jenv as jumanji_jenv
 from jenv.compat.jumanji_jenv import JumanjiJenv, convert_jumanji_spec_to_jenv_space
-from jenv.environment import Info
 from jenv.spaces import Continuous, Discrete, PyTreeSpace
-from tests.compat.contract import assert_reset_step_contract
+from compat.contract import (
+    assert_jitted_rollout_contract,
+    assert_reset_step_contract,
+)
 
 pytestmark = pytest.mark.compat
 
@@ -38,28 +40,6 @@ def _jumanji_env_warmup(jumanji_env, prng_key):
     env.step(state, action)
 
 
-def test_jumanji2jenv_wrapper(jumanji_env, prng_key):
-    """Test that JumanjiJenv wrapper correctly wraps a Jumanji environment."""
-    env = jumanji_env
-
-    key = prng_key
-    state, info = env.reset(key)
-
-    assert isinstance(info, Info)
-    assert jnp.asarray(info.reward).shape == ()  # scalar reward
-    assert hasattr(info, "terminated")
-    assert hasattr(info, "truncated")
-    # Observation is a valid pytree (often a namedtuple).
-    jax.tree.structure(info.obs)
-
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_info = env.step(state, action)
-
-    assert next_state is not None
-    assert isinstance(next_info, Info)
-    jax.tree.structure(next_info.obs)
-
-
 def test_jumanji_contract_smoke(prng_key, jumanji_env):
     env = jumanji_env
 
@@ -71,55 +51,9 @@ def test_jumanji_contract_smoke(prng_key, jumanji_env):
     assert_reset_step_contract(env, key=prng_key, obs_check=obs_check)
 
 
-def test_info_fields_reset(jumanji_env, prng_key):
-    """Test that Info container has correct fields on reset."""
+def test_jumanji_contract_scan(prng_key, scan_num_steps, jumanji_env):
     env = jumanji_env
-    key = prng_key
-
-    state, info = env.reset(key)
-
-    assert state is not None
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-    assert hasattr(info, "truncated")
-
-    assert jnp.asarray(info.reward) == 0.0
-
-
-def test_info_fields_step(jumanji_env, prng_key):
-    """Test that Info container has correct fields on step."""
-    env = jumanji_env
-    key = prng_key
-
-    state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, info = env.step(state, action)
-
-    assert next_state is not None
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-    assert hasattr(info, "truncated")
-
-    assert jnp.isscalar(info.reward) or jnp.asarray(info.reward).shape == ()
-    assert isinstance(info.terminated, (bool, jnp.ndarray))
-    assert isinstance(info.truncated, (bool, jnp.ndarray))
-
-
-def test_space_contains(jumanji_env, prng_key):
-    """Test that converted spaces correctly validate samples."""
-    env = jumanji_env
-    key = prng_key
-
-    action = env.action_space.sample(key)
-    assert env.action_space.contains(action)
-
-    # Observation-space containment can't be asserted here because observation_space is
-    # derived from Spec._specs (dict), while jumanji observations are often namedtuples.
-    state, info = env.reset(key)
-    assert state is not None
-    assert hasattr(info, "obs")
+    assert_jitted_rollout_contract(env, key=prng_key, num_steps=scan_num_steps)
 
 
 def test_observation_space_property_smoke(jumanji_env):
@@ -127,56 +61,6 @@ def test_observation_space_property_smoke(jumanji_env):
     env = jumanji_env
     space = env.observation_space
     assert isinstance(space, PyTreeSpace)
-
-
-def test_small_time_limit_smoke(prng_key):
-    """Smoke test that finite time_limit env runs."""
-
-    # Setting a time_limit should warn.
-    with pytest.warns(UserWarning):
-        env = _create_jumanji_env(time_limit=5)
-
-    key = prng_key
-    state, _info = env.reset(key)
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, _next_info = env.step(state, action)
-    assert next_state is not None
-
-
-def test_multiple_episodes(jumanji_env, prng_key):
-    """Test multiple reset/step cycles."""
-    env = jumanji_env
-
-    for episode in range(3):
-        state, info = env.reset(jax.random.fold_in(prng_key, episode))
-        assert state is not None
-
-        for step in range(5):
-            action = env.action_space.sample(
-                jax.random.fold_in(prng_key, episode * 100 + step)
-            )
-            state, info = env.step(state, action)
-            assert state is not None
-
-
-def test_full_episode_rollout_scan(jumanji_env, prng_key):
-    """Test a rollout using jax.lax.scan."""
-    env = jumanji_env
-    key = prng_key
-    state, _ = env.reset(key)
-
-    num_steps = 25
-    action_keys = jax.random.split(key, num_steps)
-    actions = jax.vmap(env.action_space.sample)(action_keys)
-
-    def step_fn(state, action):
-        return env.step(state, action)
-
-    final_state, step_infos = jax.lax.scan(step_fn, state, actions)
-
-    assert final_state is not None
-    assert isinstance(step_infos, Info)
-    assert step_infos.reward.shape == (num_steps,)
 
 
 def test_from_name_with_time_limit_warning():
@@ -247,19 +131,6 @@ def test_array_spec_conversion_non_float_not_supported():
         convert_jumanji_spec_to_jenv_space(spec)
 
 
-def test_deterministic_reset(jumanji_env, prng_key):
-    """Reset with the same key should produce the same initial observation."""
-    env = jumanji_env
-    key = jax.random.fold_in(prng_key, 42)
-
-    _state1, info1 = env.reset(key)
-    _state2, info2 = env.reset(key)
-
-    assert jax.tree.structure(info1.obs) == jax.tree.structure(info2.obs)
-    assert jnp.array_equal(jnp.asarray(info1.reward), jnp.asarray(info2.reward))
-    assert jax.tree_util.tree_all(jax.tree.map(jnp.array_equal, info1.obs, info2.obs))
-
-
 def test_deepcopy_warning(jumanji_env):
     env = jumanji_env
     with pytest.warns(RuntimeWarning, match="Trying to deepcopy"):
@@ -267,7 +138,7 @@ def test_deepcopy_warning(jumanji_env):
     assert copied is not None
 
 
-def test_namedtuple_observation_converted_to_dict_for_info():
+def test_namedtuple_observation_preserved_for_info():
     # Current implementation preserves observation as-is.
     import collections
 

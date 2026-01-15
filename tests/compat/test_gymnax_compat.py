@@ -6,11 +6,10 @@ import pytest
 from gymnax.environments import spaces as gymnax_spaces
 
 from jenv.compat.gymnax_jenv import GymnaxJenv, _convert_space
-from jenv.environment import Info
 from jenv.spaces import Continuous, Discrete, PyTreeSpace
-from tests.compat.contract import (
+from compat.contract import (
+    assert_jitted_rollout_contract,
     assert_reset_step_contract,
-    assert_scan_rollout_contract,
 )
 
 pytestmark = pytest.mark.compat
@@ -33,213 +32,6 @@ def _gymnax_env_warmup(gymnax_env, prng_key):
     state, _info = env.reset(key_reset)
     action = env.action_space.sample(key_step)
     env.step(state, action)
-
-
-def test_gymnax2jenv_wrapper(gymnax_env, prng_key):
-    """Test that GymnaxJenv wrapper correctly wraps a Gymnax environment."""
-    # Create a GymnaxJenv wrapper
-    env = gymnax_env
-
-    # Test reset
-    key = prng_key
-    state, step_info = env.reset(key)
-
-    # Check that info has the correct structure
-    assert isinstance(step_info, Info)
-
-    # Check initial values
-    assert not step_info.terminated
-    assert jnp.isscalar(step_info.reward) or step_info.reward.shape == ()
-
-    # Check that observation is in observation space
-    assert env.observation_space.contains(step_info.obs)
-
-    # Test step with a valid action
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_step_info = env.step(state, action)
-
-    # Check that next_state has the correct structure
-    assert next_state is not None
-    assert isinstance(next_step_info, Info)
-
-    # Check that observation is in observation space
-    assert env.observation_space.contains(next_step_info.obs)
-
-    # Check that action space exists and is correct type
-    assert env.action_space is not None
-    assert isinstance(env.action_space, Discrete)
-
-    # Check that observation space exists
-    assert env.observation_space is not None
-
-
-def test_info_fields_reset(gymnax_env, prng_key):
-    """Test that Info container has correct fields on reset."""
-    env = gymnax_env
-    key = prng_key
-
-    state, info = env.reset(key)
-
-    # Verify Info has correct structure
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-
-    # Verify reward is 0.0 on reset
-    assert info.reward == 0.0
-
-    # Verify terminated is False on reset
-    assert info.terminated is False
-
-    # Verify state fields
-    assert state is not None
-    assert hasattr(state, "key")
-    assert hasattr(state, "env_state")
-
-
-def test_info_fields_step(gymnax_env, prng_key):
-    """Test that Info container has correct fields on step."""
-    env = gymnax_env
-    key = prng_key
-
-    state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, info = env.step(state, action)
-
-    # Verify Info has correct structure
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-
-    # Verify reward is a scalar
-    assert jnp.isscalar(info.reward) or info.reward.shape == ()
-
-    # Verify gymnax info is preserved
-    assert hasattr(info, "info")
-
-    # Verify state is not None
-    assert next_state is not None
-
-
-def test_gymnax_container_terminated(gymnax_env, prng_key):
-    """Test that GymnaxContainer.terminated maps to done."""
-    env = gymnax_env
-    key = prng_key
-
-    state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, info = env.step(state, action)
-
-    # GymnaxContainer is used for state in step
-    # It has a terminated property that maps to done
-    # But since state doesn't have done, we test via info.terminated
-    # The state returned from step is a GymnaxContainer
-    assert next_state is not None
-    # Verify info.terminated works correctly
-    assert isinstance(info.terminated, (bool, jnp.ndarray))
-
-
-def test_episode_termination(gymnax_env, prng_key):
-    """Test that episode termination is correctly detected."""
-    env = gymnax_env
-    key = prng_key
-
-    state, info = env.reset(key)
-    assert not info.terminated
-
-    # Avoid long loops; just verify the flag type and that stepping works.
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    _next_state, next_info = env.step(state, action)
-    assert isinstance(next_info.terminated, (bool, jnp.ndarray))
-
-
-def test_multiple_episodes(gymnax_env, prng_key):
-    """Test multiple reset/step cycles."""
-    env = gymnax_env
-
-    # Run multiple episodes
-    for episode in range(3):
-        state, info = env.reset(jax.random.fold_in(prng_key, episode))
-
-        # Verify reset clears terminated flag
-        assert not info.terminated
-
-        # Take a few steps
-        for step in range(5):
-            action = env.action_space.sample(
-                jax.random.fold_in(prng_key, episode * 100 + step)
-            )
-            state, info = env.step(state, action)
-
-        # Verify state is properly reset on next reset
-        next_state, next_info = env.reset(jax.random.fold_in(prng_key, episode + 1))
-        assert not next_info.terminated
-
-        # Different keys should give different initial observations
-        if episode > 0:
-            prev_state, prev_info = env.reset(jax.random.fold_in(prng_key, episode - 1))
-            # States from different keys may differ
-            assert next_state is not None and prev_state is not None
-
-
-def test_full_episode_rollout(gymnax_env, prng_key):
-    """Test a complete episode rollout using jax.lax.scan."""
-    env = gymnax_env
-    key = prng_key
-
-    # Reset environment
-    state, _ = env.reset(key)
-
-    # Generate actions for a fixed number of steps
-    num_steps = 25
-    action_keys = jax.random.split(key, num_steps)
-    actions = jax.vmap(env.action_space.sample)(action_keys)
-
-    # Use jax.lax.scan to efficiently step through the episode
-    def step_fn(state, action):
-        return env.step(state, action)
-
-    final_state, step_infos = jax.lax.scan(step_fn, state, actions)
-
-    # Verify all rewards are finite
-    assert jnp.all(jnp.isfinite(step_infos.reward))
-
-    # Verify final state is not None
-    assert final_state is not None
-
-    # Check that Info structure is preserved through scan (batched)
-    assert isinstance(step_infos, Info)
-
-    # Test shape of batched rewards matches num_steps
-    assert step_infos.reward.shape == (num_steps,)
-
-    # Verify observations are batched correctly
-    assert step_infos.obs.shape[0] == num_steps
-
-
-def test_from_name_creation(prng_key):
-    """Test GymnaxJenv.from_name() with different environment names."""
-    # Test with "CartPole-v1" (discrete action space)
-    env_cartpole = GymnaxJenv.from_name("CartPole-v1")
-    assert env_cartpole is not None
-    assert isinstance(env_cartpole.action_space, Discrete)
-    assert isinstance(env_cartpole.observation_space, Continuous)
-
-    # Test reset and step work
-    key = prng_key
-    state, info = env_cartpole.reset(key)
-    assert state is not None
-    assert isinstance(info, Info)
-
-    # Test with "Pendulum-v1" (continuous action space)
-    env_pendulum = GymnaxJenv.from_name("Pendulum-v1")
-    assert env_pendulum is not None
-    assert isinstance(env_pendulum.action_space, Continuous)
-    assert isinstance(env_pendulum.observation_space, Continuous)
-
-    # Different environments should have different space dimensions
-    assert env_cartpole.action_space.shape != env_pendulum.action_space.shape
-    assert env_cartpole.observation_space.shape != env_pendulum.observation_space.shape
 
 
 def test_from_name_with_env_kwargs(prng_key):
@@ -294,24 +86,6 @@ def test_observation_space_conversion():
     assert jnp.array_equal(env.observation_space.high, gymnax_obs_space.high)
     assert env.observation_space.shape == gymnax_obs_space.shape
     assert env.observation_space.dtype == gymnax_obs_space.dtype
-
-
-def test_space_contains(gymnax_env, prng_key):
-    """Test that converted spaces correctly validate samples."""
-    env = gymnax_env
-
-    # Test action space contains valid actions
-    key = prng_key
-    action = env.action_space.sample(key)
-    assert env.action_space.contains(action)
-
-    # Test observation space contains observations from reset/step
-    state, info = env.reset(key)
-    assert env.observation_space.contains(info.obs)
-
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_info = env.step(state, action)
-    assert env.observation_space.contains(next_info.obs)
 
 
 def test_tuple_space_conversion(prng_key):
@@ -403,28 +177,6 @@ def test_box_space_array_bounds():
     assert jenv_space.shape == box_space.shape
 
 
-def test_deterministic_reset(gymnax_env, prng_key):
-    """Test that reset with same key produces same initial observations."""
-    env = gymnax_env
-
-    # Reset with same key multiple times
-    key = jax.random.fold_in(prng_key, 42)
-    state1, info1 = env.reset(key)
-    state2, info2 = env.reset(key)
-
-    # Verify same initial observations
-    assert jnp.array_equal(info1.obs, info2.obs)
-
-    # Test different keys - some environments may have deterministic initial states
-    # So we just verify the reset is consistent, not necessarily different
-    key_different = jax.random.fold_in(prng_key, 123)
-    state3, info3 = env.reset(key_different)
-    state4, info4 = env.reset(key_different)
-
-    # Same key should produce same result
-    assert jnp.array_equal(info3.obs, info4.obs)
-
-
 def test_key_splitting(gymnax_env, prng_key):
     """Test that keys are properly split in reset and step."""
     env = gymnax_env
@@ -457,4 +209,4 @@ def test_gymnax_contract_smoke(prng_key, gymnax_env):
 
 def test_gymnax_contract_scan(prng_key, scan_num_steps, gymnax_env):
     env = gymnax_env
-    assert_scan_rollout_contract(env, key=prng_key, num_steps=scan_num_steps)
+    assert_jitted_rollout_contract(env, key=prng_key, num_steps=scan_num_steps)

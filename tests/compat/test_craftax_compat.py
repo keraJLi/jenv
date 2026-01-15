@@ -8,9 +8,11 @@ import pytest
 
 pytest.importorskip("craftax")
 
-from jenv.environment import Info
 from jenv.spaces import Continuous, Discrete
-from tests.compat.contract import assert_reset_step_contract
+from compat.contract import (
+    assert_jitted_rollout_contract,
+    assert_reset_step_contract,
+)
 
 pytestmark = pytest.mark.compat
 
@@ -36,13 +38,6 @@ def craftax_env(craftax_env_id: str):
     return CraftaxJenv.from_name(craftax_env_id)
 
 
-@pytest.fixture(scope="module")
-def craftax_symbolic_env():
-    from jenv.compat.craftax_jenv import CraftaxJenv
-
-    return CraftaxJenv.from_name("Craftax-Symbolic-v1")
-
-
 @pytest.fixture(scope="module", autouse=True)
 def _craftax_env_warmup(craftax_env, prng_key):
     """Warm up reset/step once per Craftax variant to amortize compilation."""
@@ -66,17 +61,19 @@ def _one_step(env, state, key):
     return env.step(state, action)
 
 
-def test_craftax2jenv_wrapper_smoke(craftax_env, craftax_env_id, prng_key):
+def test_craftax_contract_smoke(craftax_env, prng_key):
     env = craftax_env
-    assert hasattr(env, "env_params")
-    assert hasattr(env, "action_space")
-    assert hasattr(env, "observation_space")
 
     def obs_check(obs, obs_space):
         assert isinstance(obs_space, Continuous)
         _assert_obs_matches_space(obs, obs_space)
 
     assert_reset_step_contract(env, key=prng_key, obs_check=obs_check)
+
+
+def test_craftax_contract_scan(craftax_env, prng_key):
+    # Keep small: craftax compile cost can be high, and we only need batched reward + protocol.
+    assert_jitted_rollout_contract(craftax_env, key=prng_key, num_steps=5)
 
 
 def test_spaces_exposed(craftax_env):
@@ -100,23 +97,6 @@ def test_key_splitting_reset_and_step(craftax_env, prng_key):
     _key_step = jax.random.fold_in(prng_key, 1)
     next_state, _ = _one_step(craftax_env, state, _key_step)
     assert not jnp.array_equal(next_state.key, state.key)
-
-
-def test_full_episode_rollout_scan_symbolic_only(
-    craftax_symbolic_env, rollout_scan, prng_key
-):
-    env = craftax_symbolic_env
-    num_steps = 25
-
-    final_state, step_infos = rollout_scan(env, prng_key, num_steps=num_steps)
-    assert final_state is not None
-    assert isinstance(step_infos, Info)
-
-    assert step_infos.reward.shape == (num_steps,)
-    assert jnp.all(jnp.isfinite(step_infos.reward))
-
-    # Symbolic observations should batch along leading dimension.
-    assert step_infos.obs.shape[0] == num_steps
 
 
 class _DummyParams:

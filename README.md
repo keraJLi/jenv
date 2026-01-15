@@ -36,3 +36,10 @@ By applying them in different orders, we get different semantics.
 - `reset(key, state=None, **kwargs)` accepts an optional prior state for cross-episode persistence and arbitrary kwargs for env/wrapper-specific needs. `step(state, action, **kwargs)` mirrors this.
 - When using `jit`/`vmap`/`pmap`, pass a concrete state pytree (not `None`) to keep shapes/static structure stable; normalize `None` to a sentinel outside the traced function if needed.
 - Wrapper ordering still matters (e.g., `ObservationNormalizationWrapper` before vs. after `VmapWrapper` gives per-env vs. global normalization), but kwargs and optional state are forwarded through the stack.
+
+## Testing
+- **Default (no optional compat deps required)**:
+  - `uv run pytest`
+- **Compat suite (requires full compat dependency group)**:
+  - `uv run pytest --run-compat`
+  - If any compat dependency is missing/broken, the run will fail fast with an error telling you what to install.

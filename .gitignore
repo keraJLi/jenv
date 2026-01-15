@@ -163,6 +163,10 @@ cython_debug/
 # Weights and Biases
 wandb/
 
+# ruff
+.ruff_cache/
+
 # Cursor
+.cursor
 .cursorignore
 AGENTS.md

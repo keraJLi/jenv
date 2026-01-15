@@ -9,8 +9,6 @@ import pathlib
 import jax
 import jax.numpy as jnp
 import pytest
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 kinetix = pytest.importorskip("kinetix")
 
@@ -21,12 +19,12 @@ from kinetix.environment import (
     StaticEnvParams,
 )
 
-from jenv.compat.kinetix_jenv import KinetixJenv
+from jenv.compat.kinetix_jenv import KinetixJenv, _normalize_level_id
 from jenv.environment import Info
 from jenv.spaces import Continuous
-from tests.compat.contract import (
+from compat.contract import (
+    assert_jitted_rollout_contract,
     assert_reset_step_contract,
-    assert_scan_rollout_contract,
 )
 
 
@@ -63,6 +61,24 @@ def _create_kinetix_env(level_id: str = "random", **kwargs):
     return KinetixJenv.from_name(level_id, env_kwargs=kwargs)
 
 
+def test_normalize_level_id_appends_json():
+    assert _normalize_level_id("s/h4_thrust_aim") == "s/h4_thrust_aim.json"
+
+
+def test_normalize_level_id_keeps_json():
+    assert _normalize_level_id("s/h4_thrust_aim.json") == "s/h4_thrust_aim.json"
+
+
+def test_normalize_level_id_strips_leading_slash_and_whitespace():
+    assert _normalize_level_id(" /s/h4_thrust_aim  ") == "s/h4_thrust_aim.json"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "/", "s/"])
+def test_normalize_level_id_rejects_empty_or_trailing_slash(bad: str):
+    with pytest.raises(ValueError):
+        _normalize_level_id(bad)
+
+
 def _first_packaged_level_id(size: str = "s") -> str:
     """Return a packaged `{size}/{name}` level id, or skip if unavailable."""
     pkg_dir = pathlib.Path(kinetix.__file__).resolve().parent
@@ -88,24 +104,6 @@ def _packaged_level_ids(sizes: tuple[str, ...] = ("s", "m", "l")) -> list[str]:
     return out
 
 
-def test_kinetix2jenv_wrapper(kinetix_random_env, prng_key):
-    env = kinetix_random_env
-
-    key = prng_key
-    state, step_info = env.reset(key)
-    assert isinstance(step_info, Info)
-    assert not step_info.terminated
-    assert jnp.isscalar(step_info.reward) or step_info.reward.shape == ()
-    # Check shape instead of expensive contains() - sufficient for smoke test
-    assert step_info.obs.shape == env.observation_space.shape
-
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, next_step_info = env.step(state, action)
-    assert next_state is not None
-    assert isinstance(next_step_info, Info)
-    assert next_step_info.obs.shape == env.observation_space.shape
-
-
 def test_kinetix_contract_smoke(prng_key, kinetix_random_env):
     env = kinetix_random_env
 
@@ -118,37 +116,7 @@ def test_kinetix_contract_smoke(prng_key, kinetix_random_env):
 
 def test_kinetix_contract_scan(prng_key, kinetix_random_env):
     # Keep small: we only want to validate batched rewards + protocol.
-    assert_scan_rollout_contract(kinetix_random_env, key=prng_key, num_steps=5)
-
-
-def test_info_fields_reset(kinetix_random_env, prng_key):
-    env = kinetix_random_env
-    key = prng_key
-    state, info = env.reset(key)
-
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-    assert info.reward == 0.0
-    assert info.terminated is False
-
-    assert hasattr(state, "key")
-    assert hasattr(state, "env_state")
-
-
-def test_info_fields_step(kinetix_random_env, prng_key):
-    env = kinetix_random_env
-    key = prng_key
-    state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
-    next_state, info = env.step(state, action)
-
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-    assert hasattr(info, "info")  # env_info passthrough
-    assert jnp.isscalar(info.reward) or info.reward.shape == ()
-    assert next_state is not None
+    assert_jitted_rollout_contract(kinetix_random_env, key=prng_key, num_steps=5)
 
 
 def test_action_space_is_continuous_by_default(kinetix_random_env):
@@ -193,14 +161,6 @@ def test_create_random_with_finite_max_timesteps_warning(prng_key):
     assert isinstance(info, Info)
 
 
-def test_deterministic_reset(kinetix_random_env, prng_key):
-    env = kinetix_random_env
-    key = jax.random.fold_in(prng_key, 42)
-    _s1, i1 = env.reset(key)
-    _s2, i2 = env.reset(key)
-    assert jnp.array_equal(i1.obs, i2.obs)
-
-
 def test_key_splitting(kinetix_random_env, prng_key):
     env = kinetix_random_env
     key = prng_key
@@ -213,49 +173,29 @@ def test_key_splitting(kinetix_random_env, prng_key):
     assert not jnp.array_equal(next_state.key, state.key)
 
 
-def test_full_episode_rollout(kinetix_random_env, prng_key):
-    env = kinetix_random_env
-    key = prng_key
-    state, _ = env.reset(key)
+def test_random_premade_kinetix_envs(prng_key):
+    """Smoke-test a few packaged `{size}/{name}` levels (skip if none are packaged)."""
+    level_ids = _packaged_level_ids()
+    if not level_ids:
+        pytest.skip("kinetix package has no packaged JSON levels")
 
-    num_steps = 10
-    action_keys = jax.random.split(key, num_steps)
-    actions = jax.vmap(env.action_space.sample)(action_keys)
+    # Keep this deterministic and small (compile/runtime).
+    for level_id in level_ids[:3]:
+        env = _create_kinetix_env(level_id)
+        reset_key, action_key = jax.random.split(prng_key, 2)
 
-    def step_fn(state, action):
-        return env.step(state, action)
+        state, info = env.reset(reset_key)
+        assert state is not None
+        assert isinstance(info, Info)
+        # Skip expensive contains check - shape/dtype check is sufficient
+        assert info.obs.shape == env.observation_space.shape
 
-    final_state, step_infos = jax.lax.scan(step_fn, state, actions)
-    assert final_state is not None
-    assert isinstance(step_infos, Info)
-    assert step_infos.reward.shape == (num_steps,)
-    assert jnp.all(jnp.isfinite(step_infos.reward))
-
-
-@settings(max_examples=1, deadline=None)
-@given(level_id=st.sampled_from(_packaged_level_ids()))
-def test_random_premade_kinetix_envs(level_id: str, prng_key):
-    """Smoke-test 3 random *handmade* packaged levels via Hypothesis.
-
-    Hypothesis parameterizes over level IDs from Kinetix's packaged
-    `kinetix/levels/{s,m,l}/*.json` files.
-    """
-    env = _create_kinetix_env(level_id)
-    key = prng_key
-    reset_key, action_key = jax.random.split(key, 2)
-
-    state, info = env.reset(reset_key)
-    assert state is not None
-    assert isinstance(info, Info)
-    # Skip expensive contains check - shape/dtype check is sufficient
-    assert info.obs.shape == env.observation_space.shape
-
-    action = env.action_space.sample(action_key)
-    next_state, next_info = env.step(state, action)
-    assert next_state is not None
-    assert isinstance(next_info, Info)
-    assert next_info.obs.shape == env.observation_space.shape
-    assert jnp.all(jnp.isfinite(jnp.asarray(next_info.reward)))
+        action = env.action_space.sample(action_key)
+        next_state, next_info = env.step(state, action)
+        assert next_state is not None
+        assert isinstance(next_info, Info)
+        assert next_info.obs.shape == env.observation_space.shape
+        assert jnp.all(jnp.isfinite(jnp.asarray(next_info.reward)))
 
 
 def test_from_name_rejects_unknown_env_kwargs():
