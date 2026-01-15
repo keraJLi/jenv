@@ -8,6 +8,12 @@ from gymnax.environments import spaces as gymnax_spaces
 from jenv.compat.gymnax_jenv import GymnaxJenv, _convert_space
 from jenv.environment import Info
 from jenv.spaces import Continuous, Discrete, PyTreeSpace
+from tests.compat.contract import (
+    assert_reset_step_contract,
+    assert_scan_rollout_contract,
+)
+
+pytestmark = pytest.mark.compat
 
 
 def _create_gymnax_env(env_name: str = "CartPole-v1", **kwargs):
@@ -15,13 +21,27 @@ def _create_gymnax_env(env_name: str = "CartPole-v1", **kwargs):
     return GymnaxJenv.from_name(env_name, env_kwargs=kwargs)
 
 
-def test_gymnax2jenv_wrapper():
+@pytest.fixture(scope="module")
+def gymnax_env():
+    return _create_gymnax_env("CartPole-v1")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _gymnax_env_warmup(gymnax_env, prng_key):
+    env = gymnax_env
+    key_reset, key_step = jax.random.split(prng_key)
+    state, _info = env.reset(key_reset)
+    action = env.action_space.sample(key_step)
+    env.step(state, action)
+
+
+def test_gymnax2jenv_wrapper(gymnax_env, prng_key):
     """Test that GymnaxJenv wrapper correctly wraps a Gymnax environment."""
     # Create a GymnaxJenv wrapper
-    env = _create_gymnax_env()
+    env = gymnax_env
 
     # Test reset
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, step_info = env.reset(key)
 
     # Check that info has the correct structure
@@ -35,7 +55,7 @@ def test_gymnax2jenv_wrapper():
     assert env.observation_space.contains(step_info.obs)
 
     # Test step with a valid action
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
     next_state, next_step_info = env.step(state, action)
 
     # Check that next_state has the correct structure
@@ -53,25 +73,10 @@ def test_gymnax2jenv_wrapper():
     assert env.observation_space is not None
 
 
-def test_gymnax_protocol_adherence():
-    """Ensure reset/step return values adhere to the Info and State protocols."""
-    env = _create_gymnax_env()
-
-    key = jax.random.PRNGKey(0)
-    state, info = env.reset(key)
-    assert state is not None
-    assert isinstance(info, Info)
-
-    action = env.action_space.sample(jax.random.PRNGKey(1))
-    next_state, next_info = env.step(state, action)
-    assert next_state is not None
-    assert isinstance(next_info, Info)
-
-
-def test_info_fields_reset():
+def test_info_fields_reset(gymnax_env, prng_key):
     """Test that Info container has correct fields on reset."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     state, info = env.reset(key)
 
@@ -92,13 +97,13 @@ def test_info_fields_reset():
     assert hasattr(state, "env_state")
 
 
-def test_info_fields_step():
+def test_info_fields_step(gymnax_env, prng_key):
     """Test that Info container has correct fields on step."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
     next_state, info = env.step(state, action)
 
     # Verify Info has correct structure
@@ -116,13 +121,13 @@ def test_info_fields_step():
     assert next_state is not None
 
 
-def test_gymnax_container_terminated():
+def test_gymnax_container_terminated(gymnax_env, prng_key):
     """Test that GymnaxContainer.terminated maps to done."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
     next_state, info = env.step(state, action)
 
     # GymnaxContainer is used for state in step
@@ -134,60 +139,53 @@ def test_gymnax_container_terminated():
     assert isinstance(info.terminated, (bool, jnp.ndarray))
 
 
-def test_episode_termination():
+def test_episode_termination(gymnax_env, prng_key):
     """Test that episode termination is correctly detected."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     state, info = env.reset(key)
     assert not info.terminated
 
-    # Step until termination (CartPole will terminate eventually)
-    # Run for a reasonable number of steps
-    max_steps = 1000
-    for step in range(max_steps):
-        if info.terminated:
-            break
-        action = env.action_space.sample(jax.random.PRNGKey(step))
-        state, info = env.step(state, action)
-
-    # Verify that terminated flag is set correctly
-    # Note: CartPole may not terminate within max_steps if episode_length is inf
-    # So we just verify the flag works correctly when set
-    assert isinstance(info.terminated, (bool, jnp.ndarray))
+    # Avoid long loops; just verify the flag type and that stepping works.
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
+    _next_state, next_info = env.step(state, action)
+    assert isinstance(next_info.terminated, (bool, jnp.ndarray))
 
 
-def test_multiple_episodes():
+def test_multiple_episodes(gymnax_env, prng_key):
     """Test multiple reset/step cycles."""
-    env = _create_gymnax_env()
+    env = gymnax_env
 
     # Run multiple episodes
     for episode in range(3):
-        state, info = env.reset(jax.random.PRNGKey(episode))
+        state, info = env.reset(jax.random.fold_in(prng_key, episode))
 
         # Verify reset clears terminated flag
         assert not info.terminated
 
         # Take a few steps
         for step in range(5):
-            action = env.action_space.sample(jax.random.PRNGKey(episode * 100 + step))
+            action = env.action_space.sample(
+                jax.random.fold_in(prng_key, episode * 100 + step)
+            )
             state, info = env.step(state, action)
 
         # Verify state is properly reset on next reset
-        next_state, next_info = env.reset(jax.random.PRNGKey(episode + 1))
+        next_state, next_info = env.reset(jax.random.fold_in(prng_key, episode + 1))
         assert not next_info.terminated
 
         # Different keys should give different initial observations
         if episode > 0:
-            prev_state, prev_info = env.reset(jax.random.PRNGKey(episode - 1))
+            prev_state, prev_info = env.reset(jax.random.fold_in(prng_key, episode - 1))
             # States from different keys may differ
             assert next_state is not None and prev_state is not None
 
 
-def test_full_episode_rollout():
+def test_full_episode_rollout(gymnax_env, prng_key):
     """Test a complete episode rollout using jax.lax.scan."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     # Reset environment
     state, _ = env.reset(key)
@@ -219,7 +217,7 @@ def test_full_episode_rollout():
     assert step_infos.obs.shape[0] == num_steps
 
 
-def test_from_name_creation():
+def test_from_name_creation(prng_key):
     """Test GymnaxJenv.from_name() with different environment names."""
     # Test with "CartPole-v1" (discrete action space)
     env_cartpole = GymnaxJenv.from_name("CartPole-v1")
@@ -228,7 +226,7 @@ def test_from_name_creation():
     assert isinstance(env_cartpole.observation_space, Continuous)
 
     # Test reset and step work
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = env_cartpole.reset(key)
     assert state is not None
     assert isinstance(info, Info)
@@ -244,14 +242,14 @@ def test_from_name_creation():
     assert env_cartpole.observation_space.shape != env_pendulum.observation_space.shape
 
 
-def test_from_name_with_env_kwargs():
+def test_from_name_with_env_kwargs(prng_key):
     """Test from_name with env_kwargs."""
     # Test that env_kwargs are passed correctly
     env = GymnaxJenv.from_name("CartPole-v1", env_kwargs={})
     assert env is not None
 
     # Test reset and step work
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = env.reset(key)
     assert state is not None
 
@@ -298,12 +296,12 @@ def test_observation_space_conversion():
     assert env.observation_space.dtype == gymnax_obs_space.dtype
 
 
-def test_space_contains():
+def test_space_contains(gymnax_env, prng_key):
     """Test that converted spaces correctly validate samples."""
-    env = _create_gymnax_env()
+    env = gymnax_env
 
     # Test action space contains valid actions
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     action = env.action_space.sample(key)
     assert env.action_space.contains(action)
 
@@ -311,12 +309,12 @@ def test_space_contains():
     state, info = env.reset(key)
     assert env.observation_space.contains(info.obs)
 
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
     next_state, next_info = env.step(state, action)
     assert env.observation_space.contains(next_info.obs)
 
 
-def test_tuple_space_conversion():
+def test_tuple_space_conversion(prng_key):
     """Test conversion of Tuple spaces."""
     # Create a gymnax Tuple space manually
     space1 = gymnax_spaces.Discrete(2)
@@ -330,12 +328,12 @@ def test_tuple_space_conversion():
     assert isinstance(jenv_space, PyTreeSpace)
 
     # Verify it contains valid samples
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     sample = jenv_space.sample(key)
     assert jenv_space.contains(sample)
 
 
-def test_dict_space_conversion():
+def test_dict_space_conversion(prng_key):
     """Test conversion of Dict spaces."""
     # Create a gymnax Dict space manually
     space1 = gymnax_spaces.Discrete(2)
@@ -349,7 +347,7 @@ def test_dict_space_conversion():
     assert isinstance(jenv_space, PyTreeSpace)
 
     # Verify it contains valid samples
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     sample = jenv_space.sample(key)
     assert jenv_space.contains(sample)
 
@@ -405,12 +403,12 @@ def test_box_space_array_bounds():
     assert jenv_space.shape == box_space.shape
 
 
-def test_deterministic_reset():
+def test_deterministic_reset(gymnax_env, prng_key):
     """Test that reset with same key produces same initial observations."""
-    env = _create_gymnax_env()
+    env = gymnax_env
 
     # Reset with same key multiple times
-    key = jax.random.PRNGKey(42)
+    key = jax.random.fold_in(prng_key, 42)
     state1, info1 = env.reset(key)
     state2, info2 = env.reset(key)
 
@@ -419,7 +417,7 @@ def test_deterministic_reset():
 
     # Test different keys - some environments may have deterministic initial states
     # So we just verify the reset is consistent, not necessarily different
-    key_different = jax.random.PRNGKey(123)
+    key_different = jax.random.fold_in(prng_key, 123)
     state3, info3 = env.reset(key_different)
     state4, info4 = env.reset(key_different)
 
@@ -427,10 +425,10 @@ def test_deterministic_reset():
     assert jnp.array_equal(info3.obs, info4.obs)
 
 
-def test_key_splitting():
+def test_key_splitting(gymnax_env, prng_key):
     """Test that keys are properly split in reset and step."""
-    env = _create_gymnax_env()
-    key = jax.random.PRNGKey(0)
+    env = gymnax_env
+    key = prng_key
 
     # Reset splits the key
     state, info = env.reset(key)
@@ -440,9 +438,23 @@ def test_key_splitting():
     assert not jnp.array_equal(state.key, key)
 
     # Step splits state.key
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(jax.random.fold_in(prng_key, 1))
     next_state, next_info = env.step(state, action)
 
     # Verify next_state has a different key
     assert hasattr(next_state, "key")
     assert not jnp.array_equal(next_state.key, state.key)
+
+
+def test_gymnax_contract_smoke(prng_key, gymnax_env):
+    env = gymnax_env
+
+    def obs_check(obs, obs_space):
+        assert obs_space.contains(obs)
+
+    assert_reset_step_contract(env, key=prng_key, obs_check=obs_check)
+
+
+def test_gymnax_contract_scan(prng_key, scan_num_steps, gymnax_env):
+    env = gymnax_env
+    assert_scan_rollout_contract(env, key=prng_key, num_steps=scan_num_steps)

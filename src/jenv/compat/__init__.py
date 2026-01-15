@@ -19,6 +19,16 @@ class HasFromNameInit(Protocol):
         cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
     ) -> Self: ...
 
+    """Creates an environment from a name and keyword arguments. Unless otherwise noted,
+    the created environment will have it's default parameters, with truncation and auto
+    reset disabled.
+    
+    Args:
+        env_name: Environment name
+        env_kwargs: Keyword arguments passed to the environment constructor
+        **kwargs: Additional keyword arguments passed to the environment wrapper
+    """
+
 
 def create(env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs):
     """Create an environment from a prefixed environment ID.

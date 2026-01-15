@@ -1,4 +1,4 @@
-import dataclasses
+import warnings
 from functools import cached_property
 from typing import Any, override
 
@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from gymnax import make as gymnax_create
 from gymnax.environments import spaces as gymnax_spaces
 from gymnax.environments.environment import Environment as GymnaxEnv
+from gymnax.environments.environment import EnvParams as GymnaxEnvParams
 
 from jenv import spaces as jenv_spaces
 from jenv.environment import Environment, Info, InfoContainer, State
@@ -22,20 +23,23 @@ class GymnaxJenv(Environment):
 
     @classmethod
     def from_name(
-        cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
+        cls,
+        env_name: str,
+        env_params: GymnaxEnvParams | None = None,
+        env_kwargs: dict[str, Any] | None = None,
     ) -> "GymnaxJenv":
         env_kwargs = env_kwargs or {}
-        gymnax_env, env_params = gymnax_create(env_name, **env_kwargs)
+        gymnax_env, default_params = gymnax_create(env_name, **env_kwargs)
+        default_params = default_params.replace(max_steps_in_episode=jnp.inf)
 
-        # Overwrite episode_length to infinity to avoid truncation. Normally we would
-        # issue a warning, but gymnax does not allow setting the maximum episode length
-        # Via any arguments to it's make function. So we are never overwriting a user-
-        # specified value.
-        for field in dataclasses.fields(env_params):
-            if field.name == "max_steps_in_episode":
-                env_params = env_params.replace(max_steps_in_episode=jnp.inf)
+        env_params = env_params or default_params
+        if env_params.max_steps_in_episode < jnp.inf:
+            warnings.warn(
+                "Creating a GymnaxJenv with a finite max_steps_in_episode is not "
+                "recommended, use a TruncationWrapper instead."
+            )
 
-        return cls(gymnax_env=gymnax_env, env_params=env_params, **kwargs)
+        return cls(gymnax_env=gymnax_env, env_params=env_params)
 
     @override
     def reset(self, key: Key) -> tuple[State, Info]:

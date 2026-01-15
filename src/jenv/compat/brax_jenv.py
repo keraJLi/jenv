@@ -22,28 +22,25 @@ class BraxJenv(Environment):
 
     @classmethod
     def from_name(
-        cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
+        cls, env_name: str, env_kwargs: dict[str, Any] | None = None
     ) -> "BraxJenv":
         env_kwargs = env_kwargs or {}
-
-        if "episode_length" in env_kwargs and env_kwargs["episode_length"] < jnp.inf:
-            warnings.warn(
-                "Creating a BraxJenv with a finite episode_length is not recommended, "
-                "as brax does not differentiate between truncation and termination. "
-            )
-
-        if "auto_reset" in env_kwargs and env_kwargs["auto_reset"]:
+        auto_reset = env_kwargs.setdefault("auto_reset", False)
+        if auto_reset:
             warnings.warn(
                 "Creating a BraxJenv with auto_reset=True is not recommended, use "
                 "an AutoResetWrapper instead."
             )
 
-        # Setting default values for episode_length and auto_reset
-        env_kwargs["episode_length"] = env_kwargs.get("episode_length", jnp.inf)
-        env_kwargs["auto_reset"] = env_kwargs.get("auto_reset", False)
+        episode_length = env_kwargs.setdefault("episode_length", jnp.inf)
+        if episode_length < jnp.inf:
+            warnings.warn(
+                "Creating a BraxJenv with a finite episode_length is not recommended, "
+                "as brax does not differentiate between truncation and termination. "
+            )
 
         env = brax_create(env_name, **env_kwargs)
-        return cls(brax_env=env, **kwargs)
+        return cls(brax_env=env)
 
     def __post_init__(self) -> "BraxJenv":
         if isinstance(self.brax_env, BraxWrapper):

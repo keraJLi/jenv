@@ -9,12 +9,11 @@ import pytest
 from jenv.compat import create
 from jenv.environment import Environment
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.compat, pytest.mark.integration]
 
 
-def test_create_brax_smoke():
+def test_create_brax_smoke(prng_key):
     pytest.importorskip("brax")
-    import jax
 
     from jenv.compat.brax_jenv import BraxJenv
 
@@ -22,13 +21,12 @@ def test_create_brax_smoke():
     assert isinstance(env, BraxJenv)
     assert isinstance(env, Environment)
 
-    _state, info = env.reset(jax.random.PRNGKey(0))
+    _state, info = env.reset(prng_key)
     assert hasattr(info, "obs")
 
 
-def test_create_gymnax_smoke():
+def test_create_gymnax_smoke(prng_key):
     pytest.importorskip("gymnax")
-    import jax
 
     from jenv.compat.gymnax_jenv import GymnaxJenv
 
@@ -36,13 +34,12 @@ def test_create_gymnax_smoke():
     assert isinstance(env, GymnaxJenv)
     assert isinstance(env, Environment)
 
-    _state, info = env.reset(jax.random.PRNGKey(0))
+    _state, info = env.reset(prng_key)
     assert hasattr(info, "obs")
 
 
-def test_create_navix_smoke():
+def test_create_navix_smoke(prng_key):
     pytest.importorskip("navix")
-    import jax
 
     from jenv.compat.navix_jenv import NavixJenv
 
@@ -50,5 +47,31 @@ def test_create_navix_smoke():
     assert isinstance(env, NavixJenv)
     assert isinstance(env, Environment)
 
-    _state, info = env.reset(jax.random.PRNGKey(0))
+    _state, info = env.reset(prng_key)
+    assert hasattr(info, "obs")
+
+
+def test_create_jumanji_smoke(prng_key):
+    pytest.importorskip("jumanji")
+
+    from jenv.compat.jumanji_jenv import JumanjiJenv
+
+    env = create("jumanji::Snake-v1")
+    assert isinstance(env, JumanjiJenv)
+    assert isinstance(env, Environment)
+
+    _state, info = env.reset(prng_key)
+    assert hasattr(info, "obs")
+
+
+def test_create_craftax_smoke(prng_key):
+    pytest.importorskip("craftax")
+
+    from jenv.compat.craftax_jenv import CraftaxJenv
+
+    env = create("craftax::Craftax-Symbolic-v1")
+    assert isinstance(env, CraftaxJenv)
+    assert isinstance(env, Environment)
+
+    _state, info = env.reset(prng_key)
     assert hasattr(info, "obs")

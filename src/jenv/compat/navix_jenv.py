@@ -18,21 +18,19 @@ class NavixJenv(Environment):
 
     @classmethod
     def from_name(
-        cls, env_name: str, env_kwargs: dict[str, Any] | None = None, **kwargs
+        cls, env_name: str, env_kwargs: dict[str, Any] | None = None
     ) -> "NavixJenv":
         env_kwargs = env_kwargs or {}
 
-        if "max_steps" in env_kwargs and env_kwargs["max_steps"] < jnp.inf:
+        max_steps = env_kwargs.setdefault("max_steps", jnp.inf)
+        if max_steps < jnp.inf:
             warnings.warn(
                 "Creating a NavixJenv with a finite max_steps is not recommended, use "
                 "a TruncationWrapper instead."
             )
 
-        # Setting default value for max_steps
-        env_kwargs["max_steps"] = env_kwargs.get("max_steps", jnp.inf)
-
         navix_env = navix.make(env_name, **env_kwargs)
-        return cls(navix_env=navix_env, **kwargs)
+        return cls(navix_env=navix_env)
 
     @override
     def reset(self, key: Key) -> tuple[State, Info]:

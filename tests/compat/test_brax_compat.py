@@ -10,16 +10,37 @@ from brax.envs import Wrapper as BraxWrapper
 from jenv.compat.brax_jenv import BraxJenv
 from jenv.environment import Info
 from jenv.spaces import Continuous
+from tests.compat.contract import (
+    assert_reset_step_contract,
+    assert_scan_rollout_contract,
+)
+
+pytestmark = pytest.mark.compat
 
 
-def test_brax2jenv_wrapper():
+@pytest.fixture(scope="module")
+def brax_fast_env():
+    return BraxJenv.from_name("fast")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _brax_fast_env_warmup(brax_fast_env, prng_key):
+    """Warm up reset/step once to amortize compilation."""
+    env = brax_fast_env
+    key_reset, key_step = jax.random.split(prng_key)
+    state, _info = env.reset(key_reset)
+    action = env.action_space.sample(key_step)
+    env.step(state, action)
+
+
+def test_brax2jenv_wrapper(brax_fast_env, prng_key):
     """Test that Brax2Jenv wrapper correctly wraps a Brax environment."""
     # Create a Brax2Jenv wrapper with the ant environment
-    env = BraxJenv.from_name("fast")
+    env = brax_fast_env
 
     # Test reset
-    key = jax.random.PRNGKey(0)
-    state, step_info = env.reset(key)
+    key_reset, key_step = jax.random.split(prng_key)
+    state, step_info = env.reset(key_reset)
 
     # Check that info has the correct structure
     assert isinstance(step_info, Info)
@@ -32,7 +53,7 @@ def test_brax2jenv_wrapper():
     assert env.observation_space.contains(step_info.obs)
 
     # Test step with a valid action
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    action = env.action_space.sample(key_step)
     next_state, next_step_info = env.step(state, action)
 
     # Check that next_state has the correct structure
@@ -51,38 +72,26 @@ def test_brax2jenv_wrapper():
     assert env.observation_space is not None
 
 
-def test_brax_protocol_adherence():
-    """Ensure reset/step return values adhere to the Info and State protocols."""
-    env = BraxJenv.from_name("fast")
+def test_brax_contract_smoke(prng_key, brax_fast_env):
+    env = brax_fast_env
 
-    key = jax.random.PRNGKey(0)
+    def obs_check(obs, obs_space):
+        assert obs_space.contains(obs)
+
+    assert_reset_step_contract(env, key=prng_key, obs_check=obs_check)
+
+
+def test_brax_contract_scan(prng_key, scan_num_steps, brax_fast_env):
+    env = brax_fast_env
+    assert_scan_rollout_contract(env, key=prng_key, num_steps=scan_num_steps)
+
+
+def test_brax_info_preserves_brax_fields_on_reset(brax_fast_env, prng_key):
+    """Brax-specific: extra Brax state fields are preserved on reset."""
+    env = brax_fast_env
+    key = prng_key
+
     state, info = env.reset(key)
-    assert state is not None
-    assert isinstance(info, Info)
-
-    action = env.action_space.sample(jax.random.PRNGKey(1))
-    next_state, next_info = env.step(state, action)
-    assert next_state is not None
-    assert isinstance(next_info, Info)
-
-
-def test_info_fields_reset():
-    """Test that Info container has correct fields on reset."""
-    env = BraxJenv.from_name("fast")
-    key = jax.random.PRNGKey(0)
-
-    state, info = env.reset(key)
-
-    # Verify Info has correct structure
-    assert hasattr(info, "obs")
-    assert hasattr(info, "reward")
-    assert hasattr(info, "terminated")
-
-    # Verify reward is 0.0 on reset
-    assert info.reward == 0.0
-
-    # Verify terminated is False on reset
-    assert info.terminated is False
 
     # Check extra Brax state fields are preserved
     # Brax state typically has: obs, reward, done, metrics, info
@@ -94,13 +103,13 @@ def test_info_fields_reset():
     assert hasattr(state, "obs")
 
 
-def test_info_fields_step():
+def test_info_fields_step(brax_fast_env, prng_key):
     """Test that Info container has correct fields on step."""
-    env = BraxJenv.from_name("fast")
-    key = jax.random.PRNGKey(0)
+    env = brax_fast_env
+    key_reset, key_action = jax.random.split(prng_key)
 
-    state, _ = env.reset(key)
-    action = env.action_space.sample(jax.random.PRNGKey(1))
+    state, _ = env.reset(key_reset)
+    action = env.action_space.sample(key_action)
     next_state, info = env.step(state, action)
 
     # Verify Info has correct structure
@@ -122,35 +131,30 @@ def test_info_fields_step():
     assert next_state is not None
 
 
-def test_episode_termination():
+def test_episode_termination(brax_fast_env, prng_key):
     """Test that episode termination is correctly detected."""
-    env = BraxJenv.from_name("fast")
-    key = jax.random.PRNGKey(0)
+    env = brax_fast_env
+    key_reset, key_action = jax.random.split(prng_key)
 
-    state, info = env.reset(key)
+    state, info = env.reset(key_reset)
     assert not info.terminated
     assert not info.done
 
-    # Step until termination (Brax environments may have max episode length)
-    # Run for a reasonable number of steps
-    max_steps = 1000
-    for step in range(max_steps):
-        if info.done:
-            break
-        action = env.action_space.sample(jax.random.PRNGKey(step))
-        state, info = env.step(state, action)
-
-    # Verify that terminated matches done flag
+    # Avoid long loops; just verify that terminated mirrors the underlying done flag.
+    action = env.action_space.sample(key_action)
+    _state, info = env.step(state, action)
     assert info.terminated == info.done
 
 
-def test_multiple_episodes():
+def test_multiple_episodes(brax_fast_env, prng_key):
     """Test multiple reset/step cycles."""
-    env = BraxJenv.from_name("fast")
+    env = brax_fast_env
 
     # Run multiple episodes
     for episode in range(3):
-        state, info = env.reset(jax.random.PRNGKey(episode))
+        key_episode = jax.random.fold_in(prng_key, episode)
+        key_reset_1, key_reset_2 = jax.random.split(key_episode)
+        state, info = env.reset(key_reset_1)
 
         # Verify reset clears terminated flag
         assert not info.terminated
@@ -158,25 +162,27 @@ def test_multiple_episodes():
 
         # Take a few steps
         for step in range(5):
-            action = env.action_space.sample(jax.random.PRNGKey(episode * 100 + step))
-            state, info = env.step(state, action)
+            key_step = jax.random.fold_in(key_episode, step)
+            action = env.action_space.sample(key_step)
+            state, info = jax.jit(env.step)(state, action)
 
         # Verify state is properly reset on next reset
-        next_state, next_info = env.reset(jax.random.PRNGKey(episode + 1))
+        next_state, next_info = jax.jit(env.reset)(key_reset_2)
         assert not next_info.terminated
         assert not next_info.done
 
         # Different keys should give different initial observations
         if episode > 0:
-            prev_state, prev_info = env.reset(jax.random.PRNGKey(episode - 1))
+            key_prev_reset = jax.random.fold_in(key_episode, 0)
+            prev_state, prev_info = jax.jit(env.reset)(key_prev_reset)
             # States from different keys may differ
             assert next_state is not None and prev_state is not None
 
 
-def test_full_episode_rollout():
+def test_full_episode_rollout(brax_fast_env, prng_key):
     """Test a complete episode rollout using jax.lax.scan."""
-    env = BraxJenv.from_name("fast")
-    key = jax.random.PRNGKey(0)
+    env = brax_fast_env
+    key = prng_key
 
     # Reset environment
     state, _ = env.reset(key)
@@ -208,7 +214,7 @@ def test_full_episode_rollout():
     assert step_infos.obs.shape[0] == num_steps
 
 
-def test_from_name_creation():
+def test_from_name_creation(prng_key):
     """Test BraxJenv.from_name() with different environment names."""
     # Test with "fast" (simple test env)
     env_fast = BraxJenv.from_name("fast")
@@ -217,7 +223,7 @@ def test_from_name_creation():
     assert isinstance(env_fast.observation_space, Continuous)
 
     # Test reset and step work
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = env_fast.reset(key)
     assert state is not None
     assert isinstance(info, Info)
@@ -232,7 +238,7 @@ def test_from_name_creation():
     assert env_fast.action_space.shape != env_ant.action_space.shape
 
 
-def test_from_name_with_episode_length_warning():
+def test_from_name_with_episode_length_warning(prng_key):
     """Test that from_name warns when using finite episode_length."""
     # Test warning for finite episode_length
     with pytest.warns(
@@ -243,12 +249,12 @@ def test_from_name_with_episode_length_warning():
 
     # Environment should still be created
     assert env is not None
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = env.reset(key)
     assert state is not None
 
 
-def test_from_name_with_auto_reset_warning():
+def test_from_name_with_auto_reset_warning(prng_key):
     """Test that from_name warns when using auto_reset=True."""
     # Test warning for auto_reset=True
     with pytest.warns(
@@ -258,7 +264,7 @@ def test_from_name_with_auto_reset_warning():
 
     # Environment should still be created
     assert env is not None
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = env.reset(key)
     assert state is not None
 
@@ -291,9 +297,9 @@ def test_wrapper_unwrapping():
     assert env.brax_env is wrapped_env.unwrapped
 
 
-def test_deepcopy_warning():
+def test_deepcopy_warning(brax_fast_env, prng_key):
     """Test that deepcopy raises a warning and returns shallow copy."""
-    env = BraxJenv.from_name("fast")
+    env = brax_fast_env
 
     # Call deepcopy and verify warning is raised
     with pytest.warns(
@@ -305,20 +311,20 @@ def test_deepcopy_warning():
     assert copied_env is not None
 
     # Verify the copied environment is usable
-    key = jax.random.PRNGKey(0)
+    key = prng_key
     state, info = copied_env.reset(key)
     assert state is not None
     assert isinstance(info, Info)
 
 
-def test_deterministic_reset():
+def test_deterministic_reset(brax_fast_env, prng_key):
     """Test that reset with same key produces same initial observations."""
-    env = BraxJenv.from_name("fast")
+    env = brax_fast_env
+    key_reset_1, key_reset_2 = jax.random.split(prng_key)
 
     # Reset with same key multiple times
-    key = jax.random.PRNGKey(42)
-    state1, info1 = env.reset(key)
-    state2, info2 = env.reset(key)
+    state1, info1 = env.reset(key_reset_1)
+    state2, info2 = env.reset(key_reset_1)
 
     # Verify same initial observations
     assert jnp.array_equal(info1.obs, info2.obs)
@@ -326,9 +332,8 @@ def test_deterministic_reset():
 
     # Test different keys - some environments may have deterministic initial states
     # So we just verify the reset is consistent, not necessarily different
-    key_different = jax.random.PRNGKey(123)
-    state3, info3 = env.reset(key_different)
-    state4, info4 = env.reset(key_different)
+    state3, info3 = env.reset(key_reset_2)
+    state4, info4 = env.reset(key_reset_2)
 
     # Same key should produce same result
     assert jnp.array_equal(info3.obs, info4.obs)

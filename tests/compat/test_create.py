@@ -15,6 +15,8 @@ import pytest
 import jenv.compat as compat
 from jenv.compat import create
 
+pytestmark = pytest.mark.compat
+
 
 def _install_dummy_suite(
     monkeypatch: pytest.MonkeyPatch,
