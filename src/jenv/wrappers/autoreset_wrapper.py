@@ -30,7 +30,7 @@ class AutoResetWrapper(Wrapper):
 
         state, info = jax.lax.cond(
             done,
-            lambda: self.reset(state.reset_key),
+            lambda: self.reset(state.reset_key, state),
             lambda: (state, info),
         )
         return state, info

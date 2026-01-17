@@ -3,10 +3,12 @@
 import jax
 import jax.numpy as jnp
 
+from jenv.struct import field
 from jenv.wrappers.autoreset_wrapper import AutoResetWrapper
 from jenv.wrappers.truncation_wrapper import TruncationWrapper
 from jenv.wrappers.vmap_envs_wrapper import VmapEnvsWrapper
 from jenv.wrappers.vmap_wrapper import VmapWrapper
+from jenv.wrappers.wrapper import WrappedState, Wrapper
 from tests.wrappers.helpers import (
     AlternatingTerminationEnv,
     StepCounterEnv,
@@ -508,3 +510,48 @@ class TestAutoResetJITCompatibility:
         # Pattern: [0.1, 0.1, 0.0, 0.1, 0.1, 0.0, 0.1, 0.1, 0.0, 0.1]
         expected_rewards = jnp.array([0.1, 0.1, 0.0, 0.1, 0.1, 0.0, 0.1, 0.1, 0.0, 0.1])
         assert jnp.allclose(rewards, expected_rewards)
+
+
+# ============================================================================
+# Tests: Regression - State Passing on Auto-Reset
+# ============================================================================
+
+
+def test_auto_reset_passes_state_to_inner_wrapper():
+    """Verify that auto-reset passes state down to inner wrappers.
+
+    This is a regression test: AutoResetWrapper should pass the current state
+    when calling reset() on auto-reset, so inner wrappers can access state
+    fields (like task_state for UED).
+    """
+
+    # Create a wrapper that tracks whether it receives state on reset
+    class StateTrackingWrapper(Wrapper):
+        class TrackingState(WrappedState):
+            received_state_on_reset: bool = field(default=False)
+
+        def reset(self, key, state=None, **kwargs):
+            inner_state, info = self.env.reset(key, state, **kwargs)
+            received = state is not None
+            return self.TrackingState(
+                inner_state=inner_state,
+                received_state_on_reset=received,
+            ), info
+
+        def step(self, state, action, **kwargs):
+            inner_state, info = self.env.step(state.inner_state, action, **kwargs)
+            return state.replace(inner_state=inner_state), info
+
+    env = StepCounterEnv(terminate_after=1)  # Terminates after 1 step
+    w = AutoResetWrapper(env=StateTrackingWrapper(env=env))
+    key = jax.random.PRNGKey(0)
+
+    state, _ = w.reset(key)
+    # First reset: state=None (expected)
+    assert state.inner_state.received_state_on_reset is False
+
+    # Step to trigger termination → auto-reset
+    state, _ = w.step(state, jnp.array(0.1))
+
+    # After auto-reset: inner wrapper should have received state
+    assert bool(state.inner_state.received_state_on_reset) is True
