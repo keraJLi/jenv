@@ -2,7 +2,6 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from jenv.wrappers.canonicalize_wrapper import CanonicalizeWrapper
 from jenv.wrappers.truncation_wrapper import TruncationWrapper
 from tests.wrappers.helpers import (
     DiscreteStepCounterEnv,
@@ -13,7 +12,7 @@ from tests.wrappers.helpers import (
 
 def test_reset_sets_truncated_false():
     env = StepCounterEnv()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=3)
+    w = TruncationWrapper(env=env, max_steps=3)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     assert state is not None
@@ -33,7 +32,7 @@ def test_step_truncates_at_threshold(
     env_factory, actions, max_steps, expected_truncated_seq
 ):
     env = env_factory()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=max_steps)
+    w = TruncationWrapper(env=env, max_steps=max_steps)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     truncs = []
@@ -45,7 +44,7 @@ def test_step_truncates_at_threshold(
 
 def test_preserves_other_info_fields():
     env = StepCounterEnv()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=2)
+    w = TruncationWrapper(env=env, max_steps=2)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     # Step once: not truncated yet
@@ -61,7 +60,7 @@ def test_preserves_other_info_fields():
 
 def test_reset_overrides_underlying_truncated_true():
     env = StepCounterEnv(reset_truncated=True)
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=5)
+    w = TruncationWrapper(env=env, max_steps=5)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     assert info.truncated is False
@@ -70,7 +69,7 @@ def test_reset_overrides_underlying_truncated_true():
 @pytest.mark.parametrize("max_steps", [0, 1])
 def test_max_steps_edge_values(max_steps):
     env = StepCounterEnv()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=max_steps)
+    w = TruncationWrapper(env=env, max_steps=max_steps)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     # First step should truncate immediately when max_steps == 0
@@ -82,7 +81,7 @@ def test_max_steps_edge_values(max_steps):
 
 def test_truncated_remains_true_after_threshold():
     env = StepCounterEnv()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=2)
+    w = TruncationWrapper(env=env, max_steps=2)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     # Step 1: steps=1 < 2
@@ -98,7 +97,7 @@ def test_truncated_remains_true_after_threshold():
 
 def test_wrapper_overrides_underlying_truncated_on_step():
     env = StepCounterEnv(step_truncated=True)
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=10)
+    w = TruncationWrapper(env=env, max_steps=10)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     # Underlying env sets truncated True, but steps < max_steps => wrapper should set False
@@ -108,7 +107,7 @@ def test_wrapper_overrides_underlying_truncated_on_step():
 
 def test_steps_as_jax_scalar_array_behaves_correctly():
     env = StepCounterEnv(steps_dtype=jnp.int32)
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=2)
+    w = TruncationWrapper(env=env, max_steps=2)
     key = jax.random.PRNGKey(0)
     state, info = w.reset(key)
     # After one step: steps = 1 (jax scalar), not truncated
@@ -130,7 +129,7 @@ def test_steps_as_jax_scalar_array_behaves_correctly():
 )
 def test_jit_compatibility(env_factory, action):
     env = env_factory()
-    w = TruncationWrapper(env=CanonicalizeWrapper(env=env), max_steps=2)
+    w = TruncationWrapper(env=env, max_steps=2)
     key = jax.random.PRNGKey(0)
 
     # Avoid returning InfoContainer across JIT boundary; return only needed pieces

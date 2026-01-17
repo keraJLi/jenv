@@ -8,7 +8,6 @@ from hypothesis import strategies as st
 
 from jenv.environment import Info
 from jenv.spaces import BatchedSpace
-from jenv.wrappers.canonicalize_wrapper import CanonicalizeWrapper
 from jenv.wrappers.observation_normalization_wrapper import (
     ObservationNormalizationWrapper,
 )
@@ -121,12 +120,12 @@ def test_normalize_then_vmap_equals_vmap_then_normalize(batch_size):
     base = VectorToyEnv(dim=3)
     # Order A: normalize then vmap
     a = VmapWrapper(
-        env=ObservationNormalizationWrapper(env=CanonicalizeWrapper(env=base)),
+        env=ObservationNormalizationWrapper(env=base),
         batch_size=batch_size,
     )
     # Order B: vmap then normalize
     b = ObservationNormalizationWrapper(
-        env=VmapWrapper(env=CanonicalizeWrapper(env=base), batch_size=batch_size)
+        env=VmapWrapper(env=base, batch_size=batch_size)
     )
     key = jax.random.PRNGKey(42)
     s_a, i_a = a.reset(key)
