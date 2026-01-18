@@ -7,7 +7,7 @@ import pytest
 from jenv.compat.mujoco_playground_jenv import MujocoPlaygroundJenv
 from jenv.environment import Info
 from jenv.spaces import Continuous, PyTreeSpace
-from .contract import (
+from tests.compat.contract import (
     assert_jitted_rollout_contract,
     assert_reset_step_contract,
 )

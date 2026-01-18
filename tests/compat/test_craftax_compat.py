@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("craftax")
 
 from jenv.spaces import Continuous, Discrete
-from .contract import (
+from tests.compat.contract import (
     assert_jitted_rollout_contract,
     assert_reset_step_contract,
 )
